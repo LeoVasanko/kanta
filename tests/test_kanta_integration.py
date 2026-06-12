@@ -1,0 +1,391 @@
+import asyncio
+import sys
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import pytest
+
+from kanta.exceptions import DatabaseError, DataIntegrityError, FileLockError
+from kanta.serialization import struct_to_dict
+
+from .support import (
+    Data,
+    EvolvableDataV1,
+    EvolvableDataV2,
+    ExoticData,
+    User,
+    change_actions,
+    fixed_change,
+    make_kanta,
+    seed_single_change,
+)
+
+
+@pytest.mark.asyncio
+async def test_load_empty(tmp_path, format_config):
+    kanta = make_kanta(tmp_path / "test.db", Data, format_config)
+    await kanta.open()
+    assert isinstance(kanta.data, Data)
+    assert kanta.data.users == {}
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_open_overwrites_caller_owned_root_data(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("seed", {"counter": 7}), format_config)
+
+    root = Data(counter=99, users={"stale": User(name="Stale", age=1)})
+    kanta = make_kanta(path, root, format_config)
+    await kanta.open()
+
+    assert kanta.data is root
+    assert root.counter == 7
+    assert root.users == {}
+
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_roundtrip(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    await kanta.flush()
+    await kanta.close()
+
+    kanta2 = make_kanta(path, Data, format_config)
+    await kanta2.open()
+    assert isinstance(kanta2.data, Data)
+    assert kanta2.data.counter == 1
+    await kanta2.close()
+
+
+@pytest.mark.asyncio
+async def test_rollback_on_error(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    try:
+        with kanta.transaction(action="inc") as data:
+            data.counter = 1
+            raise ValueError("boom")
+    except ValueError:
+        pass
+
+    assert kanta.data.counter == 0
+    assert isinstance(kanta.data, Data)
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_creates_file(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    kanta.data = Data(counter=1)
+    kanta._impl.statedict = {}
+
+    with kanta.transaction(action="bootstrap") as data:
+        data.counter = 1
+
+    await kanta.flush()
+    await kanta.close()
+    assert path.exists()
+
+
+@pytest.mark.asyncio
+async def test_snapshot(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config, flush_interval=0.01)
+    await kanta.open()
+
+    kanta.data = Data(counter=1)
+    kanta._impl.statedict = struct_to_dict(kanta.data)
+    kanta._impl.snapshot._min_diffs = 1
+    kanta._impl.snapshot.request_force()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 2
+
+    await kanta.flush()
+    await asyncio.sleep(0.05)
+    await kanta.close()
+
+    data = path.read_bytes()
+    _, serializer_cls = format_config
+    framer = serializer_cls().framer_cls()
+    snap_payload, _, _ = framer.scan_last_snapshot(data)
+    assert snap_payload is not None
+
+
+@pytest.mark.asyncio
+async def test_nested_struct_roundtrip(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    with kanta.transaction(action="create_user") as data:
+        data.users["alice"] = User(name="Alice", age=30)
+
+    await kanta.flush()
+    await kanta.close()
+
+    kanta2 = make_kanta(path, Data, format_config)
+    await kanta2.open()
+    assert isinstance(kanta2.data, Data)
+    assert kanta2.data.users["alice"].name == "Alice"
+    assert kanta2.data.users["alice"].age == 30
+
+    with kanta2.transaction(action="update_user") as data:
+        data.users["alice"].age = 31
+
+    await kanta2.flush()
+    await kanta2.close()
+
+    kanta3 = make_kanta(path, Data, format_config)
+    await kanta3.open()
+    assert isinstance(kanta3.data, Data)
+    assert kanta3.data.users["alice"].name == "Alice"
+    assert kanta3.data.users["alice"].age == 31
+    await kanta3.close()
+
+
+@pytest.mark.asyncio
+async def test_background_flush(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config, flush_interval=0.01)
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    await asyncio.sleep(0.05)
+    await kanta.close()
+
+    assert path.exists()
+    reloaded = make_kanta(path, Data, format_config)
+    await reloaded.open()
+    assert reloaded.data.counter == 1
+    await reloaded.close()
+
+
+@pytest.mark.asyncio
+async def test_async_with_open_close(tmp_path, format_config):
+    path = tmp_path / "test.db"
+
+    async with make_kanta(path, Data, format_config) as kanta:
+        with kanta.transaction(action="inc") as data:
+            data.counter = 1
+
+    assert path.exists()
+    reloaded = make_kanta(path, Data, format_config)
+    await reloaded.open()
+    assert reloaded.data.counter == 1
+    await reloaded.close()
+
+
+@pytest.mark.asyncio
+async def test_open_twice_raises(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    await kanta.open()
+    with pytest.raises(DataIntegrityError, match="already open"):
+        await kanta.open()
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_migrations_from_module(tmp_path, format_config):
+    path = tmp_path / "test.db"
+
+    mod = type(sys)("test_migrations")
+
+    def migrate_v1(d, ctx):
+        d["version"] = 1
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    kanta = make_kanta(path, Data, format_config, migrations=mod)
+    await kanta.open()
+    assert kanta.version == 1
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_msgspec_normalization_logs_migration(tmp_path, format_config):
+    path = tmp_path / "test.db"
+
+    seed_single_change(
+        path,
+        fixed_change("seed", {"users": {"alice": {"name": "Alice", "age": 30}}}),
+        format_config,
+    )
+
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+    await kanta.close()
+
+    assert "migrate:msgspec" in change_actions(path, format_config)
+
+
+@pytest.mark.asyncio
+async def test_open_locked_file_raises_filelock_error(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta1 = make_kanta(path, Data, format_config)
+    await kanta1.open()
+    kanta2 = make_kanta(path, Data, format_config)
+    try:
+        with pytest.raises(FileLockError):
+            await kanta2.open()
+    finally:
+        await kanta1.close()
+
+
+@pytest.mark.asyncio
+async def test_flush_write_failure_bubbles_database_error(
+    tmp_path, format_config, monkeypatch
+):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    def fail_write(_data: bytes) -> None:
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(kanta._impl.file, "write", fail_write)
+
+    with pytest.raises(DatabaseError, match="Failed to flush database"):
+        await kanta.flush()
+
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_background_write_failure_notifies_callback(
+    tmp_path, format_config, monkeypatch
+):
+    path = tmp_path / "test.db"
+    errors: list[DatabaseError] = []
+    signaled = asyncio.Event()
+
+    def on_fatal_error(err: DatabaseError) -> None:
+        errors.append(err)
+        signaled.set()
+
+    kanta = make_kanta(
+        path,
+        Data,
+        format_config,
+        flush_interval=0.01,
+        fatal_error=on_fatal_error,
+    )
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    def fail_write(_data: bytes) -> None:
+        raise OSError("simulated background write failure")
+
+    monkeypatch.setattr(kanta._impl.file, "write", fail_write)
+
+    await asyncio.wait_for(signaled.wait(), timeout=1.0)
+    assert errors
+    assert "Failed to flush database" in str(errors[0])
+    assert kanta._impl.background_error is not None
+
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_migrations_from_module_path(tmp_path, format_config):
+    path = tmp_path / "test.db"
+
+    module_name = "test_migrations_path"
+    mod = type(sys)(module_name)
+
+    def migrate_v1(d, ctx):
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+    sys.modules[module_name] = mod
+
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    try:
+        kanta = make_kanta(path, Data, format_config, migrations=module_name)
+        await kanta.open()
+        assert kanta.version == 1
+        assert kanta.data.counter == 2
+        await kanta.close()
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+@pytest.mark.asyncio
+async def test_uuid_datetime_bytes_keys_and_values_roundtrip(tmp_path, format_config):
+
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, ExoticData, format_config)
+    await kanta.open()
+
+    u = uuid4()
+    dt = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    bkey = b"blob-key"
+    bval = b"blob-value"
+
+    with kanta.transaction(action="set_exotic") as data:
+        data.uuid_values["u"] = u
+        data.uuid_keys[u] = 1
+        data.datetime_values["ts"] = dt
+        data.datetime_keys[dt] = 2
+        data.bytes_values["blob"] = bval
+        data.bytes_keys[bkey] = 3
+
+    await kanta.flush()
+    await kanta.close()
+
+    reloaded = make_kanta(path, ExoticData, format_config)
+    await reloaded.open()
+    assert reloaded.data.uuid_values["u"] == u
+    assert reloaded.data.uuid_keys[u] == 1
+    assert reloaded.data.datetime_values["ts"] == dt
+    assert reloaded.data.datetime_keys[dt] == 2
+    assert reloaded.data.bytes_values["blob"] == bval
+    assert reloaded.data.bytes_keys[bkey] == 3
+    await reloaded.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_evolution_add_default_field_logs_migration(
+    tmp_path, format_config
+):
+    path = tmp_path / "test.db"
+
+    kanta_v1 = make_kanta(path, EvolvableDataV1, format_config)
+    await kanta_v1.open()
+    with kanta_v1.transaction(action="seed") as data:
+        data.counter = 1
+    await kanta_v1.flush()
+    await kanta_v1.close()
+
+    kanta_v2 = make_kanta(path, EvolvableDataV2, format_config)
+    await kanta_v2.open()
+    assert kanta_v2.data.counter == 1
+    assert kanta_v2.data.enabled is True
+    await kanta_v2.close()
+
+    assert "migrate:msgspec" in change_actions(path, format_config)

@@ -1,0 +1,14 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.so
+
+# Hidden things
+.*
+!.gitignore
+
+# Build/distribution artifacts
+build/
+dist/
+*.egg-info/
+*.lock
