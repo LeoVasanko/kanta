@@ -8,7 +8,7 @@ from types import ModuleType
 from typing import Any, Generic, TypeVar
 
 from kanta.exceptions import DatabaseError
-from kanta.kanta.kantaimpl import KantaImpl
+from kanta.kantaimpl import KantaImpl
 from kanta.serialization import JsonSerializer, Serializer
 from kanta.transaction import transaction as _transaction
 

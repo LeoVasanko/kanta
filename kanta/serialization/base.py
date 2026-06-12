@@ -9,7 +9,7 @@ from typing import Any, Protocol, TypeVar
 import msgspec
 
 from kanta.exceptions import ReplayError
-from kanta.kanta.structs import ChangeRecord, Snapshot
+from kanta.structs import ChangeRecord, Snapshot
 from kanta.serialization.framing import Framer
 
 T = TypeVar("T")

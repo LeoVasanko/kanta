@@ -2,7 +2,7 @@
 
 import jsondiff
 
-from kanta.kanta.structs import ChangeRecord
+from kanta.structs import ChangeRecord
 from kanta.serialization.base import ReplayResult, replay
 from kanta.serialization.framing import LineFramer
 from kanta.serialization.json import JsonSerializer

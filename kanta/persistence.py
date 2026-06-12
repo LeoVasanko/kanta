@@ -15,7 +15,7 @@ from typing import Any
 from kanta.diff import compute_diff
 from kanta.exceptions import DatabaseError, DataIntegrityError
 from kanta.filelock import LockedFile
-from kanta.kanta.structs import ChangeRecord
+from kanta.structs import ChangeRecord
 from kanta.serialization import JsonSerializer, Serializer
 from kanta.serialization.framing import Framer
 from kanta.snapshot import SnapshotState

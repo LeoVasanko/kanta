@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from kanta.kanta.structs import Snapshot
+from kanta.structs import Snapshot
 from kanta.serialization import JsonSerializer, Serializer
 from kanta.serialization.framing import Framer, LineFramer
 
