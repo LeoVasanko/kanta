@@ -104,8 +104,9 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 serializer=self.serializer,
             )
             self.version = rr.version
+            self.mtime = rr.m
             normalized = struct_to_dict(self.data, serializer=self.serializer)
-            self.queue_change("migrate:msgspec", normalized)
+            self.queue_change("migrate:msgspec", normalized, mtime=False)
             self.snapshot.ts = (
                 datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
                 if rr.last_snapshot_mtime is not None

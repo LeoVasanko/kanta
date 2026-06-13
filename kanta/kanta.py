@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Generic, TypeVar
@@ -132,6 +133,17 @@ class Kanta(Generic[T]):
         """
         return self._impl.filename
 
+    @property
+    def mtime(self) -> datetime | None:
+        """Last modification time carried forward from change records.
+
+        Returns:
+            The latest ``m`` value, or ``None`` if no modification time has
+            been set yet. System operations such as migrations do not update
+            this value.
+        """
+        return self._impl.mtime
+
     async def open(self) -> None:
         """Open the database file and start background persistence.
 
@@ -184,6 +196,7 @@ class Kanta(Generic[T]):
         user: str | None = None,
         user_display: str | None = None,
         resolver: Any = None,
+        mtime: bool | datetime = True,
     ):
         """Create a transactional mutation context manager.
 
@@ -192,6 +205,12 @@ class Kanta(Generic[T]):
             user: Optional user identifier stored in metadata.
             user_display: Optional display name used for logging/resolution.
             resolver: Optional callable for resolving identifiers in logs.
+            mtime: Controls the modification time ``m``. ``True`` (default)
+                sets ``m`` to the current UTC time. ``False`` omits ``m`` so the
+                previous modification time remains in effect; this is used for
+                system operations that are not considered modifications. A
+                :class:`~datetime.datetime` value sets ``m`` to that explicit
+                time.
 
         Returns:
             A context manager yielding the live state object for mutation.
@@ -202,5 +221,10 @@ class Kanta(Generic[T]):
             rolled back.
         """
         return _transaction(
-            self._impl, action, user=user, user_display=user_display, resolver=resolver
+            self._impl,
+            action,
+            user=user,
+            user_display=user_display,
+            resolver=resolver,
+            mtime=mtime,
         )

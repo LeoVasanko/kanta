@@ -82,14 +82,29 @@ history.
 ## Transaction Semantics
 
 - `kanta.transaction(action=...)` captures a pre-transaction snapshot dict.
+- By default a transaction updates the modification time `m` to the current UTC
+  time.
+- `mtime=True|False|datetime` controls the modification time `m`:
+  - `True` (default) sets `m` to the current UTC time.
+  - `False` omits `m`, leaving the previous modification time in effect.
+  - A `datetime` sets `m` to that explicit value.
+- System operations such as `migrate:msgspec` use `mtime=False` so they are not
+  considered modifications and do not advance `m`.
 - On success:
   - compute diff between previous builtins and current builtins,
-  - queue a `ChangeRecord` if non-empty.
+  - queue a `ChangeRecord` if non-empty,
+  - update `kanta.mtime` when the change carries an `m` value.
 - On exception:
   - restore in-memory data from snapshot,
   - re-raise the exception.
 
 Nested transactions are rejected.
+
+## Modification Time
+
+`kanta.mtime` exposes the last modification time carried forward from change
+records. It is updated by normal transactions and preserved across snapshots and
+reloads, while system operations such as migrations leave it unchanged.
 
 ## Flush and Lifecycle
 

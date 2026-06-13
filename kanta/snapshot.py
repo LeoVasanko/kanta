@@ -37,7 +37,9 @@ class SnapshotState:
     def record_changes(self, count: int) -> None:
         self.changes += count
 
-    def maybe_write(self, file, version: int, state: dict) -> None:
+    def maybe_write(
+        self, file, version: int, state: dict, m: datetime | None = None
+    ) -> None:
         """Write snapshot when thresholds/time policy allows it."""
         if self.changes < self._min_diffs:
             return
@@ -51,14 +53,16 @@ class SnapshotState:
         if not file.is_open:
             return
         try:
-            self._write(file, version, state, now)
+            self._write(file, version, state, now, m=m)
             self._force_pending = False
         except Exception as exc:
             _logger.error("snapshot: failed to write snapshot: %r", exc)
 
-    def _write(self, file, version: int, state: dict, now: datetime) -> None:
+    def _write(
+        self, file, version: int, state: dict, now: datetime, m: datetime | None = None
+    ) -> None:
         """Write a snapshot and update internal state."""
-        payload = self._serializer.encode(Snapshot(ts=now, v=version, state=state))
+        payload = self._serializer.encode(Snapshot(ts=now, v=version, state=state, m=m))
         record_offset = file.size() if hasattr(file, "size") else 0
         file.write(self._framer.frame_snapshot(payload, record_offset=record_offset))
         self.changes = 0

@@ -8,7 +8,7 @@ import logging
 import threading
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ class PersistenceMixin:
     flush_interval: float
     version: int
     opened: bool
+    mtime: datetime | None
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize persistence-owned state used by mixin methods."""
@@ -63,6 +64,7 @@ class PersistenceMixin:
         self.background_error = None
         self.flush_interval = flush_interval
         self.version = 0
+        self.mtime: datetime | None = None
 
     async def _background_loop(self) -> None:
         """Background task that periodically flushes changes to disk."""
@@ -89,30 +91,60 @@ class PersistenceMixin:
 
     def maybe_snapshot(self) -> None:
         """Evaluate and possibly write a snapshot from current state."""
-        self.snapshot.maybe_write(self.file, self.version, self.statedict)
+        self.snapshot.maybe_write(self.file, self.version, self.statedict, m=self.mtime)
 
     def queue_change(
         self,
         action: str,
         current: dict,
+        *,
         user: str | None = None,
-        m: datetime | None = None,
-    ) -> None:
-        """Queue a change record internally (thread-safe)."""
+        mtime: bool | datetime = True,
+    ) -> ChangeRecord | None:
+        """Queue a change record internally (thread-safe).
+
+        Args:
+            action: Action label stored in the change record.
+            current: New serialized state after the change.
+            user: Optional actor identifier.
+            mtime: Controls the modification timestamp. ``True`` (default)
+                sets ``m`` to the current UTC time. ``False`` omits ``m`` so the
+                previous modification time remains in effect; this is used for
+                system operations that are not considered modifications. A
+                :class:`~datetime.datetime` value sets ``m`` to that explicit time.
+
+        Returns:
+            The queued :class:`ChangeRecord`, or ``None`` if the diff was empty.
+        """
+        now = datetime.now(UTC)
+
+        if mtime is True:
+            m = now
+        elif mtime is False:
+            m = None
+        elif isinstance(mtime, datetime):
+            m = mtime
+        else:
+            raise TypeError("mtime must be True, False, or a datetime")
+
         diff = compute_diff(self.statedict, current)
         if not diff:
-            return
+            return None
+
+        record = ChangeRecord(
+            ts=now,
+            a=action,
+            v=self.version,
+            u=user,
+            m=m,
+            diff=diff,
+        )
         with self.pending_lock:
-            self.pending_changes.append(
-                ChangeRecord(
-                    a=action,
-                    v=self.version,
-                    u=user,
-                    m=m,
-                    diff=diff,
-                )
-            )
+            self.pending_changes.append(record)
         self.statedict = copy.deepcopy(current)
+        if m is not None:
+            self.mtime = m
+        return record
 
     def flush_sync(self) -> None:
         """Synchronously flush all pending changes to disk."""

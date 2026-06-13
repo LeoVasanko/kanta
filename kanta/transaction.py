@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 from kanta.diff import compute_diff
@@ -22,6 +23,7 @@ def transaction(
     user: str | None = None,
     user_display: str | None = None,
     resolver: Any = None,
+    mtime: bool | datetime = True,
 ):
     """Wrap writes in a transaction and yield the live db object."""
     if impl.in_transaction:
@@ -58,9 +60,10 @@ def transaction(
         new_dict = struct_to_dict(impl.data, serializer=impl.serializer)
         diff = compute_diff(impl.statedict, new_dict)
         if diff:
-            impl.queue_change(action, new_dict, user=user)
-            log_change(action, diff, user_display, impl.statedict, resolver)
-            impl.statedict = new_dict
+            previous = impl.statedict
+            record = impl.queue_change(action, new_dict, user=user, mtime=mtime)
+            if record is not None:
+                log_change(action, record.diff, user_display, previous, resolver)
     except Exception:
         _logger.warning("Transaction '%s' failed, rolling back changes", action)
         if impl.transaction_snapshot is not None:

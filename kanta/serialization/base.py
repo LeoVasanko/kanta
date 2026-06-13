@@ -23,14 +23,12 @@ class ReplayResult:
         state: dict[str, Any],
         version: int = 0,
         has_migration: bool = False,
-        last_patch_mtime: float | None = None,
         last_snapshot_mtime: float | None = None,
         m: datetime | None = None,
     ):
         self.state = state
         self.version = version
         self.has_migration = has_migration
-        self.last_patch_mtime = last_patch_mtime
         self.last_snapshot_mtime = last_snapshot_mtime
         self.m = m
 
@@ -63,7 +61,6 @@ def replay(
     last_snapshot_mtime: float | None = None
     m: datetime | None = None
     has_migration = False
-    last_patch_mtime: float | None = None
 
     if snap_payload is not None:
         try:
@@ -112,14 +109,12 @@ def replay(
             has_migration = True
         if change.m is not None:
             m = change.m
-        last_patch_mtime = change.ts.timestamp()
         version = change.v
         state = _patch_state(state, change.diff)
     return ReplayResult(
         state=state,
         version=version,
         has_migration=has_migration,
-        last_patch_mtime=last_patch_mtime,
         last_snapshot_mtime=last_snapshot_mtime,
         m=m,
     )
