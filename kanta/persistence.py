@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import threading
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -31,7 +30,6 @@ class PersistenceMixin:
     flush_failed: bool
     statedict: dict[str, Any]
     pending_changes: deque[ChangeRecord]
-    pending_lock: threading.Lock
     snapshot: SnapshotState
     serializer: Serializer
     framer: Framer
@@ -55,7 +53,6 @@ class PersistenceMixin:
         self.flush_failed = False
         self.statedict = {}
         self.pending_changes = deque()
-        self.pending_lock = threading.Lock()
         self.serializer = serializer or JsonSerializer()
         self.framer = self.serializer.framer_cls()
         self.snapshot = SnapshotState(serializer=self.serializer, framer=self.framer)
@@ -139,8 +136,7 @@ class PersistenceMixin:
             m=m,
             diff=diff,
         )
-        with self.pending_lock:
-            self.pending_changes.append(record)
+        self.pending_changes.append(record)
         self.statedict = copy.deepcopy(current)
         if m is not None:
             self.mtime = m
@@ -158,10 +154,9 @@ class PersistenceMixin:
         if self.flush_failed:
             return
 
-        with self.pending_lock:
-            if not self.pending_changes:
-                return
-            changes_to_write = list(self.pending_changes)
+        if not self.pending_changes:
+            return
+        changes_to_write = list(self.pending_changes)
 
         if not self.file.is_open:
             self.file.open(self.filename, create=True)
@@ -178,15 +173,13 @@ class PersistenceMixin:
                 records.append(framed)
                 running_size += len(framed)
             if not records:
-                with self.pending_lock:
-                    self.pending_changes.clear()
+                self.pending_changes.clear()
                 return
 
             self.file.write(b"".join(records))
             self.snapshot.record_changes(len(records))
-            with self.pending_lock:
-                for _ in changes_to_write:
-                    self.pending_changes.popleft()
+            for _ in changes_to_write:
+                self.pending_changes.popleft()
         except OSError as e:
             _logger.error("Failed to flush database: %s", e)
             self.flush_failed = True
@@ -208,10 +201,9 @@ class PersistenceMixin:
         if self.flush_failed:
             return
 
-        with self.pending_lock:
-            if not self.pending_changes:
-                return
-            changes_to_write = list(self.pending_changes)
+        if not self.pending_changes:
+            return
+        changes_to_write = list(self.pending_changes)
 
         if not self.file.is_open:
             await asyncio.to_thread(self.file.open, self.filename, create=True)
@@ -228,15 +220,13 @@ class PersistenceMixin:
                 records.append(framed)
                 running_size += len(framed)
             if not records:
-                with self.pending_lock:
-                    self.pending_changes.clear()
+                self.pending_changes.clear()
                 return
 
             await asyncio.to_thread(self.file.write, b"".join(records))
             self.snapshot.record_changes(len(records))
-            with self.pending_lock:
-                for _ in changes_to_write:
-                    self.pending_changes.popleft()
+            for _ in changes_to_write:
+                self.pending_changes.popleft()
         except OSError as e:
             _logger.error("Failed to flush database: %s", e)
             self.flush_failed = True
