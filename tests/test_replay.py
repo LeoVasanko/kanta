@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
-from kanta import ChangeRecord, Snapshot, replay
+from kanta.diff import replay_jsonl as replay
+from kanta.structs import ChangeRecord, Snapshot
 from kanta.serialization.framing import LineFramer
 
 

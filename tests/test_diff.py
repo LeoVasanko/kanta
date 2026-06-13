@@ -1,4 +1,4 @@
-from kanta import compute_diff
+from kanta.diff import compute_diff
 
 
 def test_no_diff():

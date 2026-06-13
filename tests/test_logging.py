@@ -1,6 +1,6 @@
 import logging
 
-from kanta import configure_logging, log_change
+from kanta.logging import configure_logging, log_change
 from kanta.logging import logger
 
 

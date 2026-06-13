@@ -1,4 +1,4 @@
-from kanta import format_diff
+from kanta.logging import format_diff
 
 
 def test_add():

@@ -1,6 +1,6 @@
 import pytest
 
-from kanta import JsonSerializer, MsgPackSerializer
+from kanta.serialization import JsonSerializer, MsgPackSerializer
 
 
 @pytest.fixture(

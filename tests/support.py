@@ -6,7 +6,8 @@ from uuid import UUID
 
 import msgspec
 
-from kanta import ChangeRecord, Kanta
+from kanta.kanta import Kanta
+from kanta.structs import ChangeRecord
 
 
 class User(msgspec.Struct):

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from kanta import ChangeRecord
+from kanta.structs import ChangeRecord
 
 from .support import Data, make_kanta, seed_single_change
 
