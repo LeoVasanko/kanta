@@ -114,6 +114,33 @@ reloads, while system operations such as migrations leave it unchanged.
 - `kanta.close()` performs final flush and releases file resources.
 - `async with Kanta(...)` guarantees open/close lifecycle management.
 
+### Open Modes
+
+- `await kanta.open()` (default) creates the database file if missing.
+- `await kanta.open(create=False)` fails when the file is missing or empty.
+
+### Bootstrap Callbacks
+
+- Bootstrap callbacks run during `open()` when the database is empty.
+- Register callbacks via:
+  - `@kanta.bootstrap`
+  - `@kanta.bootstrap(action=..., user=..., mtime=...)`
+- Bootstrap callbacks may be sync or async and receive the live root data
+  object.
+- Multiple bootstrap callbacks are supported:
+  - callbacks execute in registration order,
+  - exactly one bootstrap `ChangeRecord` is queued,
+  - bootstrap metadata (`action`, `user`, `mtime`) is taken from the last
+    callback registration.
+- If any bootstrap callback raises, Kanta closes and removes the database file,
+  then re-raises the exception.
+
+### Fatal Error Handlers
+
+- Fatal background persistence errors can be handled with `@kanta.fatal_error`.
+- Handlers may be sync or async.
+- Multiple handlers are supported and invoked in registration order.
+
 ## Migrations
 
 - Migration source is configured on `Kanta(...)` via `migrations=`.

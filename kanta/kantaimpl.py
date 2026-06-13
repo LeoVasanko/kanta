@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import inspect
 import logging
 from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
@@ -41,13 +42,31 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.in_transaction = False
         self.transaction_snapshot: dict[str, Any] | None = None
         self.opened = False
+        self.bootstrap_callbacks: list[Any] = []
+        self.bootstrap_action = "bootstrap"
+        self.bootstrap_user: str | None = None
+        self.bootstrap_mtime: bool | datetime = True
 
         self.statedict = struct_to_dict(self.data, serializer=self.serializer)
         self.version = (
             self.migration_registry.dbver if self.migration_registry is not None else 0
         )
 
-    async def open(self) -> None:
+    def add_bootstrap(
+        self,
+        *,
+        callback,
+        action: str,
+        user: str | None,
+        mtime: bool | datetime,
+    ) -> None:
+        """Add bootstrap callback and update bootstrap metadata."""
+        self.bootstrap_callbacks.append(callback)
+        self.bootstrap_action = action
+        self.bootstrap_user = user
+        self.bootstrap_mtime = mtime
+
+    async def open(self, *, create: bool = True) -> None:
         """Open the database: load from disk, apply migrations, start background task."""
         if self.opened:
             raise DataIntegrityError(
@@ -56,11 +75,26 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 action="open",
             )
 
+        existed_before_open = self.filename.exists()
+
         content = await asyncio.to_thread(
             self.file.open_and_read,
             self.filename,
-            create=True,
+            create=create,
         )
+
+        if not create and (not existed_before_open or not content):
+            self.file.close()
+            reason = (
+                "database file did not exist"
+                if not existed_before_open
+                else "database file is empty"
+            )
+            raise DataIntegrityError(
+                f"Cannot open database: {reason}",
+                db_path=self.filename,
+                action="open",
+            )
 
         if content:
             try:
@@ -112,6 +146,27 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 if rr.last_snapshot_mtime is not None
                 else None
             )
+        elif self.bootstrap_callbacks:
+            try:
+                for callback in self.bootstrap_callbacks:
+                    callback_result = callback(self.data)
+                    if inspect.isawaitable(callback_result):
+                        await callback_result
+
+                current = struct_to_dict(self.data, serializer=self.serializer)
+                self.queue_change(
+                    self.bootstrap_action,
+                    current,
+                    user=self.bootstrap_user,
+                    mtime=self.bootstrap_mtime,
+                )
+            except Exception:
+                self.file.close()
+                try:
+                    await asyncio.to_thread(self.filename.unlink, missing_ok=True)
+                except FileNotFoundError:
+                    pass
+                raise
 
         self.opened = True
 

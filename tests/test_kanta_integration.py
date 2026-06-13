@@ -101,6 +101,202 @@ async def test_bootstrap_creates_file(tmp_path, format_config):
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_decorator_with_args(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap(action="seed_init", user="system")
+    def seed(data):
+        data.counter = 3
+
+    await kanta.open()
+    await kanta.close()
+
+    assert change_actions(path, format_config) == ["seed_init"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_decorator_without_args(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap
+    def seed(data):
+        data.counter = 4
+
+    await kanta.open()
+    await kanta.close()
+
+    assert change_actions(path, format_config) == ["bootstrap"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_decorator_async(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap(action="async_seed")
+    async def seed(data):
+        await asyncio.sleep(0)
+        data.counter = 5
+
+    await kanta.open()
+    await kanta.close()
+
+    assert change_actions(path, format_config) == ["async_seed"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_decorator_multiple_handlers_in_order(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap(action="boot_1")
+    def seed_one(data):
+        data.counter = 1
+
+    @kanta.bootstrap(action="boot_2")
+    async def seed_two(data):
+        await asyncio.sleep(0)
+        data.counter = 2
+
+    await kanta.open()
+    await kanta.close()
+
+    assert change_actions(path, format_config) == ["boot_2"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_failure_removes_database_file(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap(action="boot_fail")
+    def seed_fail(data):
+        data.counter = 10
+        raise RuntimeError("bootstrap failed")
+
+    with pytest.raises(RuntimeError, match="bootstrap failed"):
+        await kanta.open()
+
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_async_failure_removes_database_file(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.bootstrap(action="boot_fail_async")
+    async def seed_fail(data):
+        await asyncio.sleep(0)
+        data.counter = 10
+        raise RuntimeError("bootstrap async failed")
+
+    with pytest.raises(RuntimeError, match="bootstrap async failed"):
+        await kanta.open()
+
+    assert not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_open_create_false_missing_file_fails(tmp_path, format_config):
+    path = tmp_path / "missing.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    with pytest.raises(FileLockError):
+        await kanta.open(create=False)
+
+
+@pytest.mark.asyncio
+async def test_open_create_false_empty_file_fails(tmp_path, format_config):
+    path = tmp_path / "empty.db"
+    path.touch()
+    kanta = make_kanta(path, Data, format_config)
+
+    with pytest.raises(DataIntegrityError, match="empty"):
+        await kanta.open(create=False)
+
+
+@pytest.mark.asyncio
+async def test_background_write_failure_notifies_decorator_callback(
+    tmp_path, format_config, monkeypatch
+):
+    path = tmp_path / "test.db"
+    errors: list[DatabaseError] = []
+    signaled = asyncio.Event()
+
+    kanta = make_kanta(
+        path,
+        Data,
+        format_config,
+        flush_interval=0.01,
+    )
+
+    @kanta.fatal_error
+    async def on_fatal_error(err: DatabaseError) -> None:
+        errors.append(err)
+        signaled.set()
+
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    def fail_write(_data: bytes) -> None:
+        raise OSError("simulated background write failure")
+
+    monkeypatch.setattr(kanta._impl.file, "write", fail_write)
+
+    await asyncio.wait_for(signaled.wait(), timeout=1.0)
+    assert errors
+    assert "Failed to flush database" in str(errors[0])
+
+    await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_background_write_failure_notifies_multiple_callbacks_in_order(
+    tmp_path, format_config, monkeypatch
+):
+    path = tmp_path / "test.db"
+    calls: list[str] = []
+    signaled = asyncio.Event()
+
+    kanta = make_kanta(
+        path,
+        Data,
+        format_config,
+        flush_interval=0.01,
+    )
+
+    @kanta.fatal_error
+    def on_fatal_error_sync(err: DatabaseError) -> None:
+        calls.append("sync")
+
+    @kanta.fatal_error
+    async def on_fatal_error_async(err: DatabaseError) -> None:
+        await asyncio.sleep(0)
+        calls.append("async")
+        signaled.set()
+
+    await kanta.open()
+
+    with kanta.transaction(action="inc") as data:
+        data.counter = 1
+
+    def fail_write(_data: bytes) -> None:
+        raise OSError("simulated background write failure")
+
+    monkeypatch.setattr(kanta._impl.file, "write", fail_write)
+
+    await asyncio.wait_for(signaled.wait(), timeout=1.0)
+    assert calls == ["sync", "async"]
+
+    await kanta.close()
+
+
+@pytest.mark.asyncio
 async def test_snapshot(tmp_path, format_config):
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config, flush_interval=0.01)
@@ -281,17 +477,18 @@ async def test_background_write_failure_notifies_callback(
     errors: list[DatabaseError] = []
     signaled = asyncio.Event()
 
-    def on_fatal_error(err: DatabaseError) -> None:
-        errors.append(err)
-        signaled.set()
-
     kanta = make_kanta(
         path,
         Data,
         format_config,
         flush_interval=0.01,
-        fatal_error=on_fatal_error,
     )
+
+    @kanta.fatal_error
+    def on_fatal_error(err: DatabaseError) -> None:
+        errors.append(err)
+        signaled.set()
+
     await kanta.open()
 
     with kanta.transaction(action="inc") as data:

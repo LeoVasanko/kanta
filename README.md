@@ -51,6 +51,64 @@ asyncio.run(main())
 3. Let Kanta flush queued changes to disk in the background.
 4. Use snapshots and replay for fast startup and full history.
 
+## Bootstrap and Open Modes
+
+Kanta supports open-time bootstrap callbacks for initializing a brand-new
+database before `open()` returns.
+
+Register bootstrap handlers with a decorator:
+
+```python
+kanta = Kanta("data.kantadb", Data())
+
+@kanta.bootstrap(action="seed", user="system")
+def seed_defaults(data) -> None:
+    data.users["admin"] = User(name="Admin")
+
+await kanta.open()
+```
+
+You can also use `@kanta.bootstrap` with no arguments and async handlers:
+
+```python
+@kanta.bootstrap
+async def bootstrap_async(data) -> None:
+    data.counter = 1
+```
+
+When multiple bootstrap handlers are registered:
+- they run in registration order,
+- exactly one bootstrap change record is queued,
+- bootstrap metadata (`action`, `user`, `mtime`) is taken from the last
+  registration.
+
+If any bootstrap handler raises, Kanta closes and removes the database file,
+then re-raises the error.
+
+`open()` also supports strict open mode:
+
+```python
+await kanta.open(create=False)
+```
+
+With `create=False`, open fails if the database file does not exist or is
+empty.
+
+## Fatal Error Handlers
+
+Fatal background write errors can be observed with a decorator:
+
+```python
+import os
+import signal
+
+@kanta.fatal_error
+async def on_fatal(err):
+    os.kill(os.getpid(), signal.SIGTERM)  # Die
+```
+
+Multiple fatal handlers are supported and run in registration order.
+
 ## Migrations
 
 Adding or removing a field and other such simple operations are automatic, but when the time comes to really change your data model, implement a `migrate_v1` function that converts your old data to the new form. This works on plain built-in dict and other types, to avoid needing to preserve old versions of your structs.

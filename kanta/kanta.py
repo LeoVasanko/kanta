@@ -1,8 +1,6 @@
 """JSONL persistence layer with background flush task."""
 
 from __future__ import annotations
-
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
@@ -55,7 +53,6 @@ class Kanta(Generic[T]):
         migrations: ModuleType | str | None = None,
         migration_ctx: Any | None = None,
         serializer: Serializer | None = None,
-        fatal_error: Callable[[DatabaseError], None] | None = None,
         flush_interval: float = 0.1,
     ):
         """Initialize a Kanta persistence instance.
@@ -68,8 +65,6 @@ class Kanta(Generic[T]):
             migration_ctx: Optional context object passed to migration functions.
             flush_interval: Background flush interval in seconds.
             serializer: Optional serializer implementation.
-            fatal_error: Optional callback invoked immediately when the
-                background writer encounters a DatabaseError.
 
         Raises:
             ImportError: If ``migrations`` is a string path that cannot be imported.
@@ -80,7 +75,6 @@ class Kanta(Generic[T]):
 
         self._impl = KantaImpl(
             serializer=active_serializer,
-            fatal_error=fatal_error,
             filename=filename,
             data=data,
             type=data_type,
@@ -144,11 +138,15 @@ class Kanta(Generic[T]):
         """
         return self._impl.mtime
 
-    async def open(self) -> None:
+    async def open(self, *, create: bool = True) -> None:
         """Open the database file and start background persistence.
 
         This loads existing records, applies configured migrations, and starts
         the background flush task.
+
+        Args:
+            create: Whether to create the database file when missing.
+                If False, opening fails when the file does not exist or is empty.
 
         Calling ``open`` more than once on the same instance is not allowed.
 
@@ -156,7 +154,7 @@ class Kanta(Generic[T]):
             kanta.exceptions.DatabaseError: If replay or decoding fails.
             kanta.exceptions.DataIntegrityError: If the instance is already open.
         """
-        await self._impl.open()
+        await self._impl.open(create=create)
 
     async def __aenter__(self) -> Kanta[T]:
         """Enter async context manager and open the database.
@@ -188,6 +186,53 @@ class Kanta(Generic[T]):
     async def close(self) -> None:
         """Stop background task, flush pending changes, and close file lock."""
         await self._impl.close()
+
+    def bootstrap(
+        self,
+        fn=None,
+        *,
+        action: str = "bootstrap",
+        user: str | None = None,
+        mtime: bool | datetime = True,
+    ):
+        """Register a bootstrap callback executed during :meth:`open`.
+
+        Can be used as ``@kanta.bootstrap`` or ``@kanta.bootstrap(...)``.
+        The callback receives the live ``data`` object and may be sync or async.
+        """
+
+        def _register(callback):
+            if not callable(callback):
+                raise TypeError("bootstrap callback must be callable")
+            self._impl.add_bootstrap(
+                callback=callback,
+                action=action,
+                user=user,
+                mtime=mtime,
+            )
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
+    def fatal_error(self, fn=None):
+        """Register fatal error handler callback.
+
+        Can be used as ``@kanta.fatal_error``.
+        The callback receives a :class:`kanta.exceptions.DatabaseError` and may
+        be sync or async.
+        """
+
+        def _register(callback):
+            if not callable(callback):
+                raise TypeError("fatal error callback must be callable")
+            self._impl.add_fatal_error(callback)
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
 
     def transaction(
         self,
