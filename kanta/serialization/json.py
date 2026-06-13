@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 
 import msgspec
 
-from kanta.serialization.framing import LineFramer
+from kanta.serialization.framing import Framer, LineFramer
 
 T = TypeVar("T")
 
@@ -14,7 +14,7 @@ T = TypeVar("T")
 class JsonSerializer:
     """Line-based JSON serializer."""
 
-    framer_cls = LineFramer
+    framer_cls: type[Framer] = LineFramer
 
     def encode(self, obj: Any) -> bytes:
         return msgspec.json.encode(obj)
