@@ -31,11 +31,30 @@ _ADD = "\033[0;32m"  # Green for additions
 _ACTION = "\033[1;34m"  # Bold blue for action name
 _USER = "\033[0;34m"  # Blue for user display
 
+# Metadata path used when formatting the transaction actor.
+_USER_PATH = "$user"
+
+
+def _join_path(path: str, key: str) -> str:
+    """Append *key* to a dot-notation *path*."""
+    if not path:
+        return key
+    return f"{path}.{key}"
+
 
 def _format_value(
-    value: Any, max_len: int = 60, resolver: Callable[[str], str] | None = None
+    value: Any,
+    path: str,
+    *,
+    max_len: int = 60,
+    logfmt: Callable[[Any, str], str | None] | None = None,
 ) -> str:
     """Format a value for display, truncating if needed."""
+    if logfmt is not None:
+        resolved = logfmt(value, path)
+        if resolved is not None:
+            return resolved
+
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -44,10 +63,6 @@ def _format_value(
         return str(value)
     if isinstance(value, str):
         value = _UNSAFE_CHARS.sub("", value)
-        if resolver is not None:
-            resolved = resolver(value)
-            if resolved != value:
-                return resolved
         if len(value) > max_len:
             return value[: max_len - 3] + "..."
         return value
@@ -57,17 +72,21 @@ def _format_value(
         all_true = all(v is True for v in value.values())
         parts = []
         for k, v in value.items():
-            key_display = resolver(k) if resolver is not None else k
+            key_path = _join_path(path, str(k))
+            key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
             if all_true:
                 parts.append(key_display)
             else:
-                val_display = _format_value(v, max_len=30, resolver=resolver)
+                val_display = _format_value(v, key_path, max_len=30, logfmt=logfmt)
                 parts.append(f"{key_display}: {val_display}")
         return "{" + ", ".join(parts) + "}"
     if isinstance(value, list):
         if not value:
             return "[]"
-        parts = [_format_value(v, max_len=30, resolver=resolver) for v in value]
+        parts = []
+        for i, v in enumerate(value):
+            item_path = _join_path(path, str(i))
+            parts.append(_format_value(v, item_path, max_len=30, logfmt=logfmt))
         return "[" + ", ".join(parts) + "]"
     text = str(value)
     if len(text) > max_len:
@@ -75,16 +94,35 @@ def _format_value(
     return text
 
 
-def _format_path(path: list[str], resolver: Callable[[str], str] | None = None) -> str:
-    """Format a path as dot notation with prefix in dark grey, final in default."""
+def _format_path_components(
+    path: list[str], logfmt: Callable[[Any, str], str | None] | None
+) -> list[str]:
+    """Return path components after applying formatters."""
     if not path:
+        return []
+    result = []
+    for i, component in enumerate(path):
+        prefix_path = ".".join(path[: i + 1])
+        display = component
+        if logfmt is not None:
+            resolved = logfmt(component, prefix_path)
+            if resolved is not None:
+                display = resolved
+        result.append(display)
+    return result
+
+
+def _format_path(
+    path: list[str], logfmt: Callable[[Any, str], str | None] | None
+) -> str:
+    """Format a path as dot notation with prefix in dark grey, final in default."""
+    components = _format_path_components(path, logfmt)
+    if not components:
         return ""
-    if resolver is not None:
-        path = [resolver(p) for p in path]
-    if len(path) == 1:
-        return f"{_PATH_FINAL}{path[0]}{_RESET}"
-    prefix = ".".join(path[:-1])
-    final = path[-1]
+    if len(components) == 1:
+        return f"{_PATH_FINAL}{components[0]}{_RESET}"
+    prefix = ".".join(components[:-1])
+    final = components[-1]
     return f"{_PATH_PREFIX}{prefix}.{_RESET}{_PATH_FINAL}{final}{_RESET}"
 
 
@@ -158,74 +196,56 @@ def _format_change_lines(
     change_type: str,
     path: list[str],
     value: Any,
-    resolver: Callable[[str], str] | None = None,
+    logfmt: Callable[[Any, str], str | None] | None = None,
 ) -> list[str]:
     """Format a single change as one or more lines."""
-
-    def fmt_value(v: Any, child_path: list[str]) -> str:
-        return _format_value(v, resolver=resolver)
-
-    formatted_path = list(path)
-    if resolver is not None:
-        formatted_path = [resolver(p) for p in formatted_path]
+    path_str = _format_path(path, logfmt=logfmt)
 
     if change_type == "delete":
-        if len(formatted_path) == 1:
-            return [f"  {_DELETE}{formatted_path[0]} ✗{_RESET}"]
-        prefix = ".".join(formatted_path[:-1])
-        final = formatted_path[-1]
+        components = _format_path_components(path, logfmt)
+        if len(components) == 1:
+            return [f"  {_DELETE}{components[0]} ✗{_RESET}"]
+        prefix = ".".join(components[:-1])
+        final = components[-1]
         return [f"  {_PATH_PREFIX}{prefix}.{_RESET}{_DELETE}{final} ✗{_RESET}"]
 
     if change_type == "add":
         if isinstance(value, dict) and value:
-            lines = []
-            if len(formatted_path) == 1:
-                lines.append(f"  {_ADD}{formatted_path[0]}{_RESET} {_SEP}={_RESET}")
-            else:
-                prefix = ".".join(formatted_path[:-1])
-                final = formatted_path[-1]
-                lines.append(
-                    f"  {_PATH_PREFIX}{prefix}.{_RESET}{_ADD}{final}{_RESET} {_SEP}={_RESET}"
-                )
+            lines = [f"  {path_str} {_SEP}={_RESET}"]
             formatted_items = []
+            base_path = ".".join(path)
             for k, v in value.items():
-                k_display = resolver(k) if resolver is not None else k
-                v_str = fmt_value(v, path + [k])
-                formatted_items.append((k_display, v_str))
+                key_path = _join_path(base_path, str(k))
+                key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
+                v_str = _format_value(v, key_path, max_len=30, logfmt=logfmt)
+                formatted_items.append((key_display, v_str))
             max_key_len = max(len(k) for k, _ in formatted_items)
             field_width = max(max_key_len, 12)
             for k_display, v_str in formatted_items:
                 padding = " " * (field_width - len(k_display))
                 lines.append(f"    {k_display}{_SEP}:{_RESET}{padding} {v_str}")
             return lines
-        else:
-            value_str = fmt_value(value, path)
-            if len(formatted_path) == 1:
-                return [
-                    f"  {_ADD}{formatted_path[0]}{_RESET} {_SEP}={_RESET} {value_str}"
-                ]
-            prefix = ".".join(formatted_path[:-1])
-            final = formatted_path[-1]
-            return [
-                f"  {_PATH_PREFIX}{prefix}.{_RESET}{_ADD}{final}{_RESET} {_SEP}={_RESET} {value_str}"
-            ]
+        value_str = _format_value(value, ".".join(path), logfmt=logfmt)
+        return [f"  {path_str} {_SEP}={_RESET} {value_str}"]
 
-    value_str = fmt_value(value, path)
-    path_str = _format_path(path, resolver=resolver)
+    value_str = _format_value(value, ".".join(path), logfmt=logfmt)
     return [f"  {path_str} {_SEP}={_RESET} {value_str}"]
 
 
 def format_diff(
     diff: dict,
     previous: dict | None = None,
-    resolver: Callable[[str], str] | None = None,
+    logfmt: Callable[[Any, str], str | None] | None = None,
 ) -> list[str]:
     """Format a JSON diff as human-readable lines.
 
     Args:
         diff: The JSON diff dict.
         previous: The previous state dict (for determining add vs update).
-        resolver: Optional callable to resolve path components (e.g. UUID→name).
+        logfmt: Optional formatter callable ``(value, path) -> str | None``.
+            ``path`` is a dot-notation string; ``"$user"`` is used for the
+            transaction actor.  If the callable returns ``None``, default
+            formatting is used.
 
     Returns a list of formatted lines (without newlines).
     """
@@ -235,15 +255,15 @@ def format_diff(
         return []
     lines = []
     for change_type, path, value in changes:
-        lines.extend(_format_change_lines(change_type, path, value, resolver))
+        lines.extend(_format_change_lines(change_type, path, value, logfmt))
     return lines
 
 
-def format_action_header(action: str, user_display: str | None = None) -> str:
+def format_action_header(action: str, user: str | None = None) -> str:
     """Format the action header line."""
     action_str = f"{_ACTION}{action}{_RESET}"
-    if user_display:
-        user_str = f"{_USER}{user_display}{_RESET}"
+    if user:
+        user_str = f"{_USER}{user}{_RESET}"
         return f"{action_str} by {user_str}"
     return action_str
 
@@ -251,21 +271,21 @@ def format_action_header(action: str, user_display: str | None = None) -> str:
 def log_change(
     action: str,
     diff: dict,
-    user_display: str | None = None,
+    user: str | None = None,
     previous: dict | None = None,
-    resolver: Callable[[str], str] | None = None,
+    logfmt: Callable[[Any, str], str | None] | None = None,
 ) -> None:
     """Log a database change with pretty-printed diff.
 
     Args:
         action: The action name (e.g., "login", "admin:delete_user").
         diff: The JSON diff dict.
-        user_display: Optional display name of the user who performed the action.
+        user: Optional already-formatted user name to show in the header.
         previous: The previous state dict (for determining add vs update).
-        resolver: Optional callable to resolve path components (e.g. UUID→name).
+        logfmt: Optional formatter callable ``(value, path) -> str | None``.
     """
-    header = format_action_header(action, user_display)
-    diff_lines = format_diff(diff, previous, resolver)
+    header = format_action_header(action, user)
+    diff_lines = format_diff(diff, previous, logfmt)
 
     if not diff_lines:
         logger.info(header)

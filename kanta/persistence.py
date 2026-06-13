@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import inspect
 import logging
 from collections import deque
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.diff import compute_diff
 from kanta.exceptions import DatabaseError, DataIntegrityError
 from kanta.filelock import LockedFile
@@ -35,7 +34,7 @@ class PersistenceMixin:
     serializer: Serializer
     framer: Framer
     background_task: asyncio.Task | None
-    fatal_error_handlers: list[Callable[[DatabaseError], Any]]
+    callback_registry: CallbackRegistry
     background_error: DatabaseError | None
     flush_interval: float
     version: int
@@ -57,15 +56,15 @@ class PersistenceMixin:
         self.framer = self.serializer.framer_cls()
         self.snapshot = SnapshotState(serializer=self.serializer, framer=self.framer)
         self.background_task = None
-        self.fatal_error_handlers = []
+        self.callback_registry = CallbackRegistry()
         self.background_error = None
         self.flush_interval = flush_interval
         self.version = 0
         self.mtime: datetime | None = None
 
-    def add_fatal_error(self, callback: Callable[[DatabaseError], Any]) -> None:
+    def add_fatal_error(self, callback) -> None:
         """Register one fatal error callback in call order."""
-        self.fatal_error_handlers.append(callback)
+        self.callback_registry.register("fatal_error", callback)
 
     async def _background_loop(self) -> None:
         """Background task that periodically flushes changes to disk."""
@@ -80,15 +79,19 @@ class PersistenceMixin:
                 break
             except DatabaseError as e:
                 self.background_error = e
-                for callback in self.fatal_error_handlers:
-                    try:
-                        callback_result = callback(e)
-                        if inspect.isawaitable(callback_result):
-                            await callback_result
-                    except Exception as callback_error:
-                        _logger.exception(
-                            "Background error callback failed: %s", callback_error
-                        )
+
+                def _log_callback_error(callback_error, callback):
+                    _logger.exception(
+                        "Background error callback %r failed: %s",
+                        callback,
+                        callback_error,
+                    )
+
+                await self.callback_registry.invoke(
+                    "fatal_error",
+                    InjectionContext(error=e, kanta=self._kanta),
+                    on_error=_log_callback_error,
+                )
                 _logger.error("Background flush loop stopped: %s", e)
                 break
 

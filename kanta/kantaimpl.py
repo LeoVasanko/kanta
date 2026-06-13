@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
-import inspect
 import logging
 from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
 
+from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
 from kanta.migrate import MigrationRegistry
 from kanta.persistence import PersistenceMixin
@@ -29,6 +29,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.data: T = kwargs.pop("data")
         self.migrations = kwargs.pop("migrations", None)
         self.migration_ctx = kwargs.pop("migration_ctx", None)
+        self._kanta = kwargs.pop("kanta", None)
         super().__init__(**kwargs)
         self.migration_registry: MigrationRegistry | None = None
         if self.migrations is not None:
@@ -42,10 +43,14 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.in_transaction = False
         self.transaction_snapshot: dict[str, Any] | None = None
         self.opened = False
-        self.bootstrap_callbacks: list[Any] = []
         self.bootstrap_action = "bootstrap"
         self.bootstrap_user: str | None = None
         self.bootstrap_mtime: bool | datetime = True
+
+        self.callback_registry = CallbackRegistry(
+            kanta_class=type(self._kanta) if self._kanta is not None else None,
+            data_type=self.data_type,
+        )
 
         self.statedict = struct_to_dict(self.data, serializer=self.serializer)
         self.version = (
@@ -61,10 +66,14 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         mtime: bool | datetime,
     ) -> None:
         """Add bootstrap callback and update bootstrap metadata."""
-        self.bootstrap_callbacks.append(callback)
+        self.callback_registry.register("bootstrap", callback)
         self.bootstrap_action = action
         self.bootstrap_user = user
         self.bootstrap_mtime = mtime
+
+    def add_logfmt(self, callback, *, path: str | None = None) -> None:
+        """Register one transaction logfmt callback."""
+        self.callback_registry.register("logfmt", callback, path=path)
 
     async def open(self, *, create: bool = True) -> None:
         """Open the database: load from disk, apply migrations, start background task."""
@@ -146,12 +155,12 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 if rr.last_snapshot_mtime is not None
                 else None
             )
-        elif self.bootstrap_callbacks:
+        elif self.callback_registry.has("bootstrap"):
             try:
-                for callback in self.bootstrap_callbacks:
-                    callback_result = callback(self.data)
-                    if inspect.isawaitable(callback_result):
-                        await callback_result
+                await self.callback_registry.invoke(
+                    "bootstrap",
+                    InjectionContext(data=self.data, kanta=self._kanta),
+                )
 
                 current = struct_to_dict(self.data, serializer=self.serializer)
                 self.queue_change(

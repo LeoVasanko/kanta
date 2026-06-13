@@ -119,14 +119,22 @@ reloads, while system operations such as migrations leave it unchanged.
 - `await kanta.open()` (default) creates the database file if missing.
 - `await kanta.open(create=False)` fails when the file is missing or empty.
 
-### Bootstrap Callbacks
+### Callbacks
+
+All callbacks are registered via decorators and receive arguments by their
+annotation types.  Parameters without a supported annotation are only allowed
+when they have a default value.
+
+#### Bootstrap Callbacks
 
 - Bootstrap callbacks run during `open()` when the database is empty.
 - Register callbacks via:
   - `@kanta.bootstrap`
   - `@kanta.bootstrap(action=..., user=..., mtime=...)`
-- Bootstrap callbacks may be sync or async and receive the live root data
-  object.
+- Bootstrap callbacks may be sync or async.  The live root data object is
+  injected by annotating a parameter with the struct type passed to `Kanta`,
+  and the `Kanta` instance itself can be injected by annotating a parameter
+  with `Kanta`.
 - Multiple bootstrap callbacks are supported:
   - callbacks execute in registration order,
   - exactly one bootstrap `ChangeRecord` is queued,
@@ -135,11 +143,47 @@ reloads, while system operations such as migrations leave it unchanged.
 - If any bootstrap callback raises, Kanta closes and removes the database file,
   then re-raises the exception.
 
-### Fatal Error Handlers
+#### Fatal Error Handlers
 
 - Fatal background persistence errors can be handled with `@kanta.fatal_error`.
-- Handlers may be sync or async.
-- Multiple handlers are supported and invoked in registration order.
+- Handlers may be sync or async.  The `DatabaseError` is injected by annotating
+  a parameter with `DatabaseError`; `Kanta` may also be injected.
+- Multiple handlers are supported and invoked in registration order.  A failing
+  handler is logged and does not prevent subsequent handlers from running.
+
+#### Transaction Log Formatting
+
+- Logfmt callbacks prettify identifiers in the change log and are registered with
+  `@kanta.logfmt`.
+- A logfmt callback is called for every value Kanta renders: diff values, path
+  components, and the transaction `user`.  It receives the value as its first
+  parameter and optionally a `path: str` parameter with the dot-notation path
+  to the value.  The special path `"$user"` is used when rendering the
+  transaction actor, replacing the old `user_display` parameter.
+- The callback returns `str | None`: a string replaces the default rendering,
+  while `None` means "fall through to the next formatter".
+- State dicts can be injected via `DictPre` (`Annotated[dict, "pre"]`)
+  and `DictPost` (`Annotated[dict, "post"]`); the `Kanta` instance can also be
+  injected.
+- Alternatively, a logfmt callback can be a class inheriting from `LogFmt`; the
+  framework instantiates it with the state dicts and calls its
+  `resolve(value, path) -> str | None` method.
+- Multiple logfmt callbacks are stacked in registration order; the first
+  callback to return a non-`None` result wins.  If none handle a value, Kanta
+  falls back to its default formatting.
+
+The decorator accepts an optional ``path`` so the callback only runs for
+values at that exact path:
+
+```python
+@kanta.logfmt(path="$user")
+def resolve_user(value: str, current: DictPost) -> str | None:
+    return current.get("users", {}).get(value, {}).get("name")
+
+@kanta.logfmt(path="users.uuid-1")
+def resolve_user_key(value: str) -> str | None:
+    return names_by_id.get(value)
+```
 
 ## Migrations
 

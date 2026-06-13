@@ -1,3 +1,4 @@
+from .callbacks import DictPost, DictPre, LogFmt
 from .diff import compute_diff
 from .diff import replay_jsonl as replay
 from .exceptions import DatabaseError, DataIntegrityError, FileLockError, ReplayError
@@ -20,7 +21,10 @@ __all__ = [
     "LockedFile",
     "log_change",
     "MsgPackSerializer",
+    "DictPost",
+    "DictPre",
     "ReplayError",
-    "replay",
+    "LogFmt",
     "Snapshot",
+    "replay",
 ]

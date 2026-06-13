@@ -1,4 +1,4 @@
-"""JSONL persistence layer with background flush task."""
+"""Kanta DB main public API"""
 
 from __future__ import annotations
 from datetime import datetime
@@ -6,7 +6,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Generic, TypeVar
 
-from kanta.exceptions import DatabaseError
 from kanta.kantaimpl import KantaImpl
 from kanta.serialization import JsonSerializer, Serializer
 from kanta.transaction import transaction as _transaction
@@ -81,6 +80,7 @@ class Kanta(Generic[T]):
             migrations=migrations,
             migration_ctx=migration_ctx,
             flush_interval=flush_interval,
+            kanta=self,
         )
 
     @property
@@ -202,8 +202,6 @@ class Kanta(Generic[T]):
         """
 
         def _register(callback):
-            if not callable(callback):
-                raise TypeError("bootstrap callback must be callable")
             self._impl.add_bootstrap(
                 callback=callback,
                 action=action,
@@ -225,9 +223,28 @@ class Kanta(Generic[T]):
         """
 
         def _register(callback):
-            if not callable(callback):
-                raise TypeError("fatal error callback must be callable")
             self._impl.add_fatal_error(callback)
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
+    def logfmt(self, fn=None, *, path: str | None = None):
+        """Register a transaction logfmt callback.
+
+        Can be used as ``@kanta.logfmt`` or ``@kanta.logfmt(path=...)``.
+        The callback is called for each value being rendered and receives the
+        value plus an optional ``path: str`` parameter.  It must return
+        ``str | None`` (or inherit from :class:`kanta.callbacks.LogFmt`).
+
+        When ``path`` is given, the callback is only invoked for values whose
+        dot-notation path matches the pattern (full match, shell-style wildcards
+        such as ``*`` are supported).
+        """
+
+        def _register(callback):
+            self._impl.add_logfmt(callback, path=path)
             return callback
 
         if fn is None:
@@ -239,17 +256,15 @@ class Kanta(Generic[T]):
         action: str,
         *,
         user: str | None = None,
-        user_display: str | None = None,
-        resolver: Any = None,
         mtime: bool | datetime = True,
     ):
         """Create a transactional mutation context manager.
 
         Args:
             action: Action label stored in the change record.
-            user: Optional user identifier stored in metadata.
-            user_display: Optional display name used for logging/resolution.
-            resolver: Optional callable for resolving identifiers in logs.
+            user: Optional user identifier stored in metadata and rendered in
+                the log header.  Register a ``@kanta.logfmt`` callback to format
+                the user value; the path ``"$user"`` is passed for this case.
             mtime: Controls the modification time ``m``. ``True`` (default)
                 sets ``m`` to the current UTC time. ``False`` omits ``m`` so the
                 previous modification time remains in effect; this is used for
@@ -269,7 +284,5 @@ class Kanta(Generic[T]):
             self._impl,
             action,
             user=user,
-            user_display=user_display,
-            resolver=resolver,
             mtime=mtime,
         )

@@ -106,7 +106,7 @@ async def test_bootstrap_decorator_with_args(tmp_path, format_config):
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap(action="seed_init", user="system")
-    def seed(data):
+    def seed(data: Data):
         data.counter = 3
 
     await kanta.open()
@@ -121,7 +121,7 @@ async def test_bootstrap_decorator_without_args(tmp_path, format_config):
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap
-    def seed(data):
+    def seed(data: Data):
         data.counter = 4
 
     await kanta.open()
@@ -136,7 +136,7 @@ async def test_bootstrap_decorator_async(tmp_path, format_config):
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap(action="async_seed")
-    async def seed(data):
+    async def seed(data: Data):
         await asyncio.sleep(0)
         data.counter = 5
 
@@ -152,11 +152,11 @@ async def test_bootstrap_decorator_multiple_handlers_in_order(tmp_path, format_c
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap(action="boot_1")
-    def seed_one(data):
+    def seed_one(data: Data):
         data.counter = 1
 
     @kanta.bootstrap(action="boot_2")
-    async def seed_two(data):
+    async def seed_two(data: Data):
         await asyncio.sleep(0)
         data.counter = 2
 
@@ -172,7 +172,7 @@ async def test_bootstrap_failure_removes_database_file(tmp_path, format_config):
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap(action="boot_fail")
-    def seed_fail(data):
+    def seed_fail(data: Data):
         data.counter = 10
         raise RuntimeError("bootstrap failed")
 
@@ -188,7 +188,7 @@ async def test_bootstrap_async_failure_removes_database_file(tmp_path, format_co
     kanta = make_kanta(path, Data, format_config)
 
     @kanta.bootstrap(action="boot_fail_async")
-    async def seed_fail(data):
+    async def seed_fail(data: Data):
         await asyncio.sleep(0)
         data.counter = 10
         raise RuntimeError("bootstrap async failed")
