@@ -138,7 +138,7 @@ class Kanta(Generic[T]):
         """
         return self._impl.mtime
 
-    async def open(self, *, create: bool = True) -> None:
+    async def open(self, *, create: bool = True, readonly: bool = False) -> None:
         """Open the database file and start background persistence.
 
         This loads existing records, applies configured migrations, and starts
@@ -147,6 +147,9 @@ class Kanta(Generic[T]):
         Args:
             create: Whether to create the database file when missing.
                 If False, opening fails when the file does not exist or is empty.
+            readonly: If True, open the database read-only. No lock is acquired,
+                no background flush task is started, and transactions are
+                rejected. The file is not created if missing.
 
         Calling ``open`` more than once on the same instance is not allowed.
 
@@ -154,7 +157,7 @@ class Kanta(Generic[T]):
             kanta.exceptions.DatabaseError: If replay or decoding fails.
             kanta.exceptions.DataIntegrityError: If the instance is already open.
         """
-        await self._impl.open(create=create)
+        await self._impl.open(create=create, readonly=readonly)
 
     async def __aenter__(self) -> Kanta[T]:
         """Enter async context manager and open the database.

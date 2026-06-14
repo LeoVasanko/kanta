@@ -94,6 +94,18 @@ await kanta.open(create=False)
 With `create=False`, open fails if the database file does not exist or is
 empty.
 
+Read-only mode opens an existing database without locking it or starting the
+background flush task. This is useful for readers that must not block the
+writer or modify the file:
+
+```python
+await kanta.open(readonly=True)
+```
+
+In read-only mode, records are replayed and migrations are applied in memory,
+but transactions and explicit flushes are rejected and the file is never
+created if missing.
+
 ## Fatal Error Handlers
 
 Fatal background write errors can be observed with a decorator:

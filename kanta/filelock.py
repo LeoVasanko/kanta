@@ -34,6 +34,7 @@ if sys.platform == "win32":
     _GENERIC_READ = 0x80000000
     _GENERIC_WRITE = 0x40000000
     _FILE_SHARE_READ = 0x00000001
+    _FILE_SHARE_WRITE = 0x00000002
     _OPEN_EXISTING = 3
     _OPEN_ALWAYS = 4
     _FILE_ATTRIBUTE_NORMAL = 0x80
@@ -91,15 +92,16 @@ else:
 
 
 class LockedFile:
-    """A file opened with an exclusive write lock.
+    """A file opened for read+write with an optional exclusive lock.
 
     Usage::
 
         f = LockedFile()
-        f.open(path)          # open + lock (read+write)
-        content = f.read()    # read entire content
-        f.write(data)         # append data (seeks to end first)
-        f.close()             # release lock + close fd
+        f.open(path)                    # open + lock (read+write)
+        f.open(path, readonly=True)     # open read-only without locking
+        content = f.read()              # read entire content
+        f.write(data)                   # append data (seeks to end first)
+        f.close()                       # release lock + close fd
 
     Unix:    fcntl.flock (advisory) — read-only callers that don't flock are unaffected.
     Windows: CreateFileW with FILE_SHARE_READ — OS blocks other writers.
@@ -108,12 +110,13 @@ class LockedFile:
     def __init__(self) -> None:
         self._fd: int | None = None  # Unix fd or Windows HANDLE
 
-    def open(self, path: Path, *, create: bool = False) -> None:
-        """Open *path* for read+write with an exclusive lock.
+    def open(self, path: Path, *, create: bool = False, readonly: bool = False) -> None:
+        """Open *path* and optionally acquire an exclusive lock.
 
         Args:
             path:   File to open and lock.
             create: If True, create the file if it doesn't exist (bootstrap).
+            readonly: If True, open read-only without acquiring a lock.
 
         Raises:
             FileLockError: If the file is locked by another process or not found.
@@ -122,16 +125,16 @@ class LockedFile:
             return  # Already open (idempotent)
 
         if sys.platform == "win32":
-            self._open_win32(path, create)
+            self._open_win32(path, create, readonly)
         else:
-            self._open_unix(path, create)
+            self._open_unix(path, create, readonly)
 
-    def open_and_read(self, path: Path, create: bool = False) -> bytes:
-        """Open *path* with exclusive lock and read all content.
+    def open_and_read(self, path: Path, create: bool = False, readonly: bool = False) -> bytes:
+        """Open *path* and read all content.
 
         Combined operation for efficient use with asyncio.to_thread().
         """
-        self.open(path, create=create)
+        self.open(path, create=create, readonly=readonly)
         return self.read()
 
     def read(self) -> bytes:
@@ -188,20 +191,24 @@ class LockedFile:
 
     # -- Unix ----------------------------------------------------------------
 
-    def _open_unix(self, path: Path, create: bool) -> None:
-        flags = os.O_RDWR | (os.O_CREAT if create else 0)
+    def _open_unix(self, path: Path, create: bool, readonly: bool) -> None:
+        if readonly:
+            flags = os.O_RDONLY
+        else:
+            flags = os.O_RDWR | (os.O_CREAT if create else 0)
         try:
             fd = os.open(path, flags, 0o666)
         except FileNotFoundError:
             _fatal(f"Database file not found: {path.resolve()}", db_path=path)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            _fatal(
-                f"{path.resolve()}: database already locked by another instance",
-                db_path=path,
-            )
+        if not readonly:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(fd)
+                _fatal(
+                    f"{path.resolve()}: database already locked by another instance",
+                    db_path=path,
+                )
         self._fd = fd
 
     def _read_unix(self) -> bytes:
@@ -220,12 +227,19 @@ class LockedFile:
 
     # -- Windows -------------------------------------------------------------
 
-    def _open_win32(self, path: Path, create: bool) -> None:
-        disposition = _OPEN_ALWAYS if create else _OPEN_EXISTING
+    def _open_win32(self, path: Path, create: bool, readonly: bool) -> None:
+        if readonly:
+            disposition = _OPEN_EXISTING
+            access = _GENERIC_READ
+            share = _FILE_SHARE_READ | _FILE_SHARE_WRITE
+        else:
+            disposition = _OPEN_ALWAYS if create else _OPEN_EXISTING
+            access = _GENERIC_READ | _GENERIC_WRITE
+            share = _FILE_SHARE_READ
         handle = _kernel32.CreateFileW(
             str(path),
-            _GENERIC_READ | _GENERIC_WRITE,
-            _FILE_SHARE_READ,
+            access,
+            share,
             None,
             disposition,
             _FILE_ATTRIBUTE_NORMAL,

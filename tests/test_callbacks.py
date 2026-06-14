@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional, Union
 
 import pytest
 
@@ -49,14 +49,58 @@ def test_logfmt_requires_value_annotation(tmp_path, format_config):
             return None
 
 
-def test_logfmt_requires_return_annotation(tmp_path, format_config):
+def test_logfmt_allows_missing_return_annotation(tmp_path, format_config):
     kanta = make_kanta(tmp_path / "test.db", Data, format_config)
 
-    with pytest.raises(TypeError, match="must annotate its return"):
+    @kanta.logfmt
+    def resolve_names(value: str, current: DictPost):
+        return None
 
-        @kanta.logfmt
-        def resolve_names(value: str, current: DictPost):
+
+def test_logfmt_class_allows_missing_return_annotation(tmp_path, format_config):
+    kanta = make_kanta(tmp_path / "test.db", Data, format_config)
+
+    @kanta.logfmt
+    class UserLogFmt(LogFmt):
+        def resolve(self, value: str, path: str):
             return None
+
+
+# fmt: off
+def test_logfmt_accepts_optional_return_typing_forms(tmp_path, format_config):
+    kanta = make_kanta(tmp_path / "test.db", Data, format_config)
+
+    @kanta.logfmt
+    def resolve_optional(value: str) -> Optional[str]:  # noqa: UP007
+        return value
+
+    @kanta.logfmt
+    def resolve_union(value: str) -> Union[str, None]:  # noqa: UP007
+        return value
+
+    @kanta.logfmt
+    def resolve_pipe(value: "str") -> "str | None":
+        return value
+
+
+def test_logfmt_class_accepts_optional_return_typing_forms(tmp_path, format_config):
+    kanta = make_kanta(tmp_path / "test.db", Data, format_config)
+
+    @kanta.logfmt
+    class OptionalStyle(LogFmt):
+        def resolve(self, value: str, path: str) -> Optional[str]:  # noqa: UP007
+            return value
+
+    @kanta.logfmt
+    class UnionStyle(LogFmt):
+        def resolve(self, value: str, path: str) -> Union[str, None]:  # noqa: UP007
+            return value
+
+    @kanta.logfmt
+    class StringStyle(LogFmt):
+        def resolve(self, value: "str", path: "str") -> "str | None":
+            return value
+# fmt: on
 
 
 def test_logfmt_rejects_async_callback(tmp_path, format_config):

@@ -39,6 +39,7 @@ class PersistenceMixin:
     flush_interval: float
     version: int
     opened: bool
+    readonly: bool
     mtime: datetime | None
 
     def __init__(self, **kwargs: Any) -> None:
@@ -68,6 +69,8 @@ class PersistenceMixin:
 
     async def _background_loop(self) -> None:
         """Background task that periodically flushes changes to disk."""
+        if self.readonly:
+            return
         while True:
             try:
                 await asyncio.sleep(self.flush_interval)
@@ -160,6 +163,13 @@ class PersistenceMixin:
                 action="flush_sync",
             )
 
+        if self.readonly:
+            raise DataIntegrityError(
+                "Cannot flush in read-only mode",
+                db_path=self.filename,
+                action="flush_sync",
+            )
+
         if self.flush_failed:
             return
 
@@ -203,6 +213,13 @@ class PersistenceMixin:
         if not self.opened:
             raise DataIntegrityError(
                 "Kanta instance must be opened before flush",
+                db_path=self.filename,
+                action="flush",
+            )
+
+        if self.readonly:
+            raise DataIntegrityError(
+                "Cannot flush in read-only mode",
                 db_path=self.filename,
                 action="flush",
             )

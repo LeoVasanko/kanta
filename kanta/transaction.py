@@ -24,6 +24,13 @@ def transaction(
     mtime: bool | datetime = True,
 ):
     """Wrap writes in a transaction and yield the live db object."""
+    if impl.readonly:
+        raise DataIntegrityError(
+            "Cannot start transaction in read-only mode",
+            db_path=impl.filename,
+            action=action,
+        )
+
     if impl.in_transaction:
         raise RuntimeError(
             "Nested or simultaneous transactions are not supported "

@@ -12,6 +12,7 @@ and receive the value plus an optional ``path`` string.  They return
 from __future__ import annotations
 
 import inspect
+import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, Union, get_args, get_origin
@@ -317,17 +318,13 @@ class CallbackRegistry:
                     f"Allowed: str path, {self._allowed_message('logfmt')}"
                 )
 
-        if sig.return_annotation is inspect.Signature.empty:
-            raise TypeError(
-                f"logfmt callback {callback.__name__} must annotate its "
-                f"return type as str | None"
-            )
-        return_ann = self._resolve_raw_annotation(sig.return_annotation, callback)
-        if not self._is_optional_str(return_ann):
-            raise TypeError(
-                f"logfmt callback {callback.__name__} must return str | None, "
-                f"got {return_ann!r}"
-            )
+        if sig.return_annotation is not inspect.Signature.empty:
+            return_ann = self._resolve_raw_annotation(sig.return_annotation, callback)
+            if not self._is_optional_str(return_ann):
+                raise TypeError(
+                    f"logfmt callback {callback.__name__} must return str | None, "
+                    f"got {return_ann!r}"
+                )
 
         return _LogFmtFunctionSpec(
             callback=callback,
@@ -416,19 +413,15 @@ class CallbackRegistry:
                 f"logfmt class {cls.__name__}.resolve must accept a 'path: str' parameter"
             )
 
-        if resolve_sig.return_annotation is inspect.Signature.empty:
-            raise TypeError(
-                f"logfmt class {cls.__name__}.resolve must annotate its "
-                f"return type as str | None"
+        if resolve_sig.return_annotation is not inspect.Signature.empty:
+            return_ann = self._resolve_raw_annotation(
+                resolve_sig.return_annotation, resolve
             )
-        return_ann = self._resolve_raw_annotation(
-            resolve_sig.return_annotation, resolve
-        )
-        if not self._is_optional_str(return_ann):
-            raise TypeError(
-                f"logfmt class {cls.__name__}.resolve must return str | None, "
-                f"got {return_ann!r}"
-            )
+            if not self._is_optional_str(return_ann):
+                raise TypeError(
+                    f"logfmt class {cls.__name__}.resolve must return str | None, "
+                    f"got {return_ann!r}"
+                )
 
         return _LogFmtClassSpec(cls=cls, inject_params=inject_params, path=path)
 
@@ -516,7 +509,7 @@ class CallbackRegistry:
     @staticmethod
     def _unwrap_optional(ann: Any) -> Any:
         origin = get_origin(ann)
-        if origin is not Union:
+        if origin not in (Union, types.UnionType):
             return ann
         args = [arg for arg in get_args(ann) if arg is not type(None)]
         return args[0] if len(args) == 1 else ann
@@ -524,7 +517,7 @@ class CallbackRegistry:
     @staticmethod
     def _is_optional_str(ann: Any) -> bool:
         origin = get_origin(ann)
-        if origin is not Union:
+        if origin not in (Union, types.UnionType):
             return ann is str
         args = get_args(ann)
         return type(None) in args and any(arg is str for arg in args)

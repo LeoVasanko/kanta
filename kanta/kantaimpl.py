@@ -43,6 +43,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.in_transaction = False
         self.transaction_snapshot: dict[str, Any] | None = None
         self.opened = False
+        self.readonly = False
         self.bootstrap_action = "bootstrap"
         self.bootstrap_user: str | None = None
         self.bootstrap_mtime: bool | datetime = True
@@ -75,7 +76,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         """Register one transaction logfmt callback."""
         self.callback_registry.register("logfmt", callback, path=path)
 
-    async def open(self, *, create: bool = True) -> None:
+    async def open(self, *, create: bool = True, readonly: bool = False) -> None:
         """Open the database: load from disk, apply migrations, start background task."""
         if self.opened:
             raise DataIntegrityError(
@@ -84,12 +85,17 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 action="open",
             )
 
+        self.readonly = readonly
         existed_before_open = self.filename.exists()
+
+        # Read-only mode never creates the file.
+        open_create = create and not readonly
 
         content = await asyncio.to_thread(
             self.file.open_and_read,
             self.filename,
-            create=create,
+            create=open_create,
+            readonly=readonly,
         )
 
         if not create and (not existed_before_open or not content):
@@ -149,11 +155,21 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             self.version = rr.version
             self.mtime = rr.m
             normalized = struct_to_dict(self.data, serializer=self.serializer)
-            self.queue_change("migrate:msgspec", normalized, mtime=False)
+            if self.readonly:
+                self.statedict = copy.deepcopy(normalized)
+            else:
+                self.queue_change("migrate:msgspec", normalized, mtime=False)
             self.snapshot.ts = (
                 datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
                 if rr.last_snapshot_mtime is not None
                 else None
+            )
+        elif self.readonly:
+            self.file.close()
+            raise DataIntegrityError(
+                "Cannot open empty database in read-only mode",
+                db_path=self.filename,
+                action="open",
             )
         elif self.callback_registry.has("bootstrap"):
             try:
@@ -179,7 +195,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         self.opened = True
 
-        self.background_task = asyncio.create_task(self._background_loop())
+        if not self.readonly:
+            self.background_task = asyncio.create_task(self._background_loop())
 
     async def close(self) -> None:
         """Stop the background task, flush pending changes, and release the file lock."""
@@ -196,7 +213,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         # Always run a final flush in case the background task never reached
         # its cancellation handler.
-        await self.flush()
+        if not self.readonly:
+            await self.flush()
 
         self.file.close()
         self.opened = False

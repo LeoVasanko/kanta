@@ -118,6 +118,12 @@ reloads, while system operations such as migrations leave it unchanged.
 
 - `await kanta.open()` (default) creates the database file if missing.
 - `await kanta.open(create=False)` fails when the file is missing or empty.
+- `await kanta.open(readonly=True)` opens an existing database read-only.
+  - The file is opened without acquiring a lock and without a background flush
+    task.
+  - Existing records are replayed and migrations are still applied in memory.
+  - Transactions and explicit flushes are rejected.
+  - The file is never created if missing.
 
 ### Callbacks
 
