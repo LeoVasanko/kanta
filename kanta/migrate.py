@@ -7,22 +7,12 @@ or by prefix. Each runs exactly once based on the current version.
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 from types import ModuleType
 from typing import Any
 
-import msgspec
-
 _logger = logging.getLogger(__name__)
-
-
-class MigrationCtx(msgspec.Struct, omit_defaults=True):
-    """Context passed to each migration function.
-
-    Subclass or replace this with your own context type.
-    """
-
-    pass
 
 
 class MigrationRegistry:
@@ -33,15 +23,20 @@ class MigrationRegistry:
         registry = MigrationRegistry()
 
         @registry.register
-        def migrate_v1(d: dict, ctx: MigrationCtx) -> None:
+        def migrate_v1(d: dict, kanta) -> None:
             d.setdefault("version", 1)
+            kanta.ctx.note = "migrated"
 
-        new_version = registry.apply(state, current_version=0)
+        @registry.register
+        def migrate_v2(d: dict) -> None:
+            d.setdefault("version", 2)
+
+        new_version = registry.apply(state, current_version=0, kanta=kanta)
 
     Or load from a module::
 
         registry = MigrationRegistry.from_module("myapp.migrations")
-        new_version = registry.apply(state, current_version=0)
+        new_version = registry.apply(state, current_version=0, kanta=kanta)
     """
 
     def __init__(self) -> None:
@@ -89,11 +84,21 @@ class MigrationRegistry:
         """Current schema version (= highest discovered migration, or 0)."""
         return max(self._migrations.keys(), default=0)
 
+    @staticmethod
+    def _call_migration(fn: Any, data_dict: dict[str, Any], kanta: Any) -> None:
+        """Call *fn* with the data dict and, if accepted, the Kanta instance."""
+        try:
+            inspect.signature(fn).bind(data_dict, kanta)
+        except TypeError:
+            fn(data_dict)
+        else:
+            fn(data_dict, kanta)
+
     def apply(
         self,
         data_dict: dict[str, Any],
         current_version: int,
-        ctx: MigrationCtx | None = None,
+        kanta: Any,
         *,
         silent: bool = False,
     ) -> int:
@@ -109,7 +114,7 @@ class MigrationRegistry:
                     f"Missing migration step migrate_v{next_version} "
                     f"(highest discovered is v{self.dbver})"
                 )
-            fn(data_dict, ctx or MigrationCtx())
+            self._call_migration(fn, data_dict, kanta)
             current_version = next_version
             if not silent:
                 desc = (fn.__doc__ or fn.__name__).split("\n")[0].rstrip(".")

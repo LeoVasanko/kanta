@@ -3,7 +3,7 @@
 from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Generic, TypeVar
 
 from kanta.kantaimpl import KantaImpl
@@ -50,7 +50,6 @@ class Kanta(Generic[T]):
         *,
         type: type[T] | None = None,
         migrations: ModuleType | str | None = None,
-        migration_ctx: Any | None = None,
         serializer: Serializer | None = None,
         flush_interval: float = 0.1,
     ):
@@ -61,7 +60,6 @@ class Kanta(Generic[T]):
             data: Caller-owned root msgspec.Struct state instance.
             type: Optional explicit root type. Defaults to ``type(data)``.
             migrations: Optional migrations module object or import path.
-            migration_ctx: Optional context object passed to migration functions.
             flush_interval: Background flush interval in seconds.
             serializer: Optional serializer implementation.
 
@@ -78,7 +76,6 @@ class Kanta(Generic[T]):
             data=data,
             type=data_type,
             migrations=migrations,
-            migration_ctx=migration_ctx,
             flush_interval=flush_interval,
             kanta=self,
         )
@@ -126,6 +123,15 @@ class Kanta(Generic[T]):
             Filesystem path used for persistence.
         """
         return self._impl.filename
+
+    @property
+    def ctx(self) -> SimpleNamespace:
+        """User-writable context namespace.
+
+        Migration functions receive the ``Kanta`` instance and can read or
+        mutate ``kanta.ctx`` during migrations.
+        """
+        return self._impl.ctx
 
     @property
     def mtime(self) -> datetime | None:

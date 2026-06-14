@@ -404,7 +404,7 @@ async def test_migrations_from_module(tmp_path, format_config):
 
     mod = type(sys)("test_migrations")
 
-    def migrate_v1(d, ctx):
+    def migrate_v1(d, kanta):
         d["version"] = 1
 
     mod.__dict__["migrate_v1"] = migrate_v1
@@ -514,7 +514,7 @@ async def test_migrations_from_module_path(tmp_path, format_config):
     module_name = "test_migrations_path"
     mod = type(sys)(module_name)
 
-    def migrate_v1(d, ctx):
+    def migrate_v1(d, kanta):
         d["counter"] = 2
 
     mod.__dict__["migrate_v1"] = migrate_v1

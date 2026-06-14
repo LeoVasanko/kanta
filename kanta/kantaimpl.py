@@ -7,6 +7,7 @@ import copy
 import importlib
 import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
@@ -28,8 +29,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.data_type = kwargs.pop("type")
         self.data: T = kwargs.pop("data")
         self.migrations = kwargs.pop("migrations", None)
-        self.migration_ctx = kwargs.pop("migration_ctx", None)
         self._kanta = kwargs.pop("kanta", None)
+        self.ctx = SimpleNamespace()
         super().__init__(**kwargs)
         self.migration_registry: MigrationRegistry | None = None
         if self.migrations is not None:
@@ -142,7 +143,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
             if self.migration_registry is not None:
                 rr.version = self.migration_registry.apply(
-                    rr.state, rr.version, self.migration_ctx
+                    rr.state, rr.version, self._kanta
                 )
 
             self.statedict = copy.deepcopy(rr.state)

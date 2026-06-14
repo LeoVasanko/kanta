@@ -116,7 +116,7 @@ async def test_readonly_runs_migrations(tmp_path, format_config):
         format_config,
     )
 
-    def migrate_v1(data, ctx):
+    def migrate_v1(data, kanta):
         data.setdefault("enabled", True)
 
     migrations = make_migrations_module("readonly_migrations", "migrate_v1", migrate_v1)
