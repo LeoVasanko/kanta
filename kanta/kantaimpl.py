@@ -139,8 +139,11 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     cause_type=type(e).__name__,
                 ) from e
 
+            migrations_ran = False
             if self.migrations is not None:
+                previous_version = rr.version
                 rr.version = self.migrations.apply(rr.state, rr.version, self._kanta)
+                migrations_ran = rr.version != previous_version
 
             self.statedict = copy.deepcopy(rr.state)
             self.data = restore_data_in_place(
@@ -155,6 +158,13 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
             else:
+                if migrations_ran:
+                    self.queue_change(
+                        f"migrate:v{self.version}",
+                        self.statedict,
+                        mtime=False,
+                        force=True,
+                    )
                 self.queue_change("migrate:msgspec", normalized, mtime=False)
             self.snapshot.ts = (
                 datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)

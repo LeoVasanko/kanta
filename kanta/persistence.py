@@ -140,8 +140,10 @@ class PersistenceMixin:
             raise TypeError("mtime must be True, False, or a datetime")
 
         diff = compute_diff(self.statedict, current)
-        if not diff and not force:
-            return None
+        if not diff:
+            if not force:
+                return None
+            diff = {}
 
         record = ChangeRecord(
             ts=now,

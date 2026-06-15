@@ -6,11 +6,14 @@ or by prefix. Each runs exactly once based on the current version.
 
 from __future__ import annotations
 
+import copy
 import importlib
 import inspect
 import logging
 from types import ModuleType
 from typing import Any
+
+from kanta.exceptions import DatabaseError
 
 _logger = logging.getLogger(__name__)
 
@@ -94,6 +97,11 @@ class Migrations:
         """Current schema version (= highest discovered migration, or 0)."""
         return max(self._migrations.keys(), default=0)
 
+    @property
+    def minver(self) -> int:
+        """Minimum supported current version (first migration minus 1, or 0)."""
+        return min(self._migrations.keys(), default=1) - 1
+
     @staticmethod
     def _call_migration(fn: Any, data_dict: dict[str, Any], kanta: Any) -> None:
         """Call *fn* with the data dict and, if accepted, the Kanta instance."""
@@ -114,19 +122,33 @@ class Migrations:
     ) -> int:
         """Apply pending migrations to *data_dict* in place.
 
+        Missing intermediate migration steps are silently skipped.
+
+        Raises:
+            DatabaseError: If the database version is newer than the highest
+                supported version or older than the minimum supported version.
+
         Returns the new version after all migrations.
         """
-        while current_version < self.dbver:
-            next_version = current_version + 1
-            fn = self._migrations.get(next_version)
-            if fn is None:
-                raise ValueError(
-                    f"Missing migration step migrate_v{next_version} "
-                    f"(highest discovered is v{self.dbver})"
-                )
+        if current_version > self.dbver:
+            raise DatabaseError(
+                f"Database version v{current_version} is newer than the "
+                f"highest supported version v{self.dbver}"
+            )
+        if current_version < self.minver:
+            raise DatabaseError(
+                f"Database version v{current_version} is older than the "
+                f"minimum supported version v{self.minver}"
+            )
+
+        for version in sorted(self._migrations.keys()):
+            if version <= current_version:
+                continue
+            fn = self._migrations[version]
+            before = copy.deepcopy(data_dict) if not silent else None
             self._call_migration(fn, data_dict, kanta)
-            current_version = next_version
-            if not silent:
+            current_version = version
+            if not silent and before != data_dict:
                 desc = (fn.__doc__ or fn.__name__).split("\n")[0].rstrip(".")
                 _logger.info("Applied migration %s: %s", fn.__name__, desc)
         return current_version

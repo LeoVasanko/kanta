@@ -17,6 +17,7 @@ from .support import (
     change_actions,
     fixed_change,
     make_kanta,
+    make_migrations_module,
     read_changes,
     seed_single_change,
 )
@@ -471,6 +472,43 @@ async def test_msgspec_normalization_logs_migration(tmp_path, format_config):
     await kanta.close()
 
     assert "migrate:msgspec" in change_actions(path, format_config)
+
+
+@pytest.mark.asyncio
+async def test_empty_migration_is_recorded_and_not_reapplied(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    seed_single_change(
+        path, fixed_change("init", {"counter": 0, "users": {}}), format_config
+    )
+
+    def migrate_v1(d, kanta):
+        """No-op migration that only bumps the schema version."""
+        pass
+
+    mod = make_migrations_module("empty_migration_mod", "migrate_v1", migrate_v1)
+
+    try:
+        kanta = make_kanta(path, Data, format_config, migrations=mod)
+        await kanta.open()
+        assert kanta.version == 1
+        await kanta.flush()
+        await kanta.close()
+
+        records = read_changes(path, format_config)
+        migration_records = [r for r in records if r.a.startswith("migrate")]
+        assert len(migration_records) == 1
+        assert migration_records[0].v == 1
+        assert migration_records[0].diff == {}
+
+        kanta2 = make_kanta(path, Data, format_config, migrations=mod)
+        await kanta2.open()
+        assert kanta2.version == 1
+        await kanta2.close()
+
+        records2 = read_changes(path, format_config)
+        assert len([r for r in records2 if r.a.startswith("migrate")]) == 1
+    finally:
+        sys.modules.pop("empty_migration_mod", None)
 
 
 @pytest.mark.asyncio
