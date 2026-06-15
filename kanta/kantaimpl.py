@@ -110,6 +110,9 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 action="open",
             )
 
+        # From this point the file is open and must be closed via close().
+        self.opened = True
+
         if content:
             try:
                 rr = replay(
@@ -140,12 +143,24 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 ) from e
 
             migrations_ran = False
+            state_before_migrations = None
             if self.migrations is not None:
                 previous_version = rr.version
+                state_before_migrations = copy.deepcopy(rr.state)
                 rr.version = self.migrations.apply(rr.state, rr.version, self._kanta)
                 migrations_ran = rr.version != previous_version
 
-            self.statedict = copy.deepcopy(rr.state)
+            self.snapshot.ts = (
+                datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
+                if rr.last_snapshot_mtime is not None
+                else None
+            )
+
+            self.statedict = copy.deepcopy(
+                state_before_migrations
+                if state_before_migrations is not None
+                else rr.state
+            )
             self.data = restore_data_in_place(
                 self.data,
                 rr.state,
@@ -158,20 +173,24 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
             else:
-                if migrations_ran:
-                    self.queue_change(
+                migration_record = None
+                if migrations_ran and self.statedict != rr.state:
+                    migration_record = self.queue_change(
                         f"migrate:v{self.version}",
-                        self.statedict,
+                        rr.state,
                         mtime=False,
-                        force=True,
                     )
-                self.queue_change("migrate:msgspec", normalized, mtime=False)
-            self.snapshot.ts = (
-                datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
-                if rr.last_snapshot_mtime is not None
-                else None
-            )
+                msgspec_record = self.queue_change(
+                    "migrate:msgspec", normalized, mtime=False
+                )
+                if migrations_ran or msgspec_record is not None:
+                    self.snapshot.request_force()
+                    await self.flush()
+                    self.snapshot.maybe_write(
+                        self.file, self.version, self.statedict, m=self.mtime
+                    )
         elif self.readonly:
+            self.opened = False
             self.file.close()
             raise DataIntegrityError(
                 "Cannot open empty database in read-only mode",
@@ -196,14 +215,13 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     force=True,
                 )
             except Exception:
+                self.opened = False
                 self.file.close()
                 try:
                     await asyncio.to_thread(self.filename.unlink, missing_ok=True)
                 except FileNotFoundError:
                     pass
                 raise
-
-        self.opened = True
 
         if not self.readonly:
             self.background_task = asyncio.create_task(self._background_loop())

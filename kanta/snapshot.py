@@ -41,15 +41,16 @@ class SnapshotState:
         self, file, version: int, state: dict, m: datetime | None = None
     ) -> None:
         """Write snapshot when thresholds/time policy allows it."""
-        if self.changes < self._min_diffs:
-            return
         force = self._force_pending
         now = datetime.now(UTC)
-        if not force and now.weekday() != 6:  # 6 = Sunday
-            return
-        sunday_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if not force and self.ts is not None and self.ts >= sunday_midnight:
-            return
+        if not force:
+            if self.changes < self._min_diffs:
+                return
+            if now.weekday() != 6:  # 6 = Sunday
+                return
+            sunday_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if self.ts is not None and self.ts >= sunday_midnight:
+                return
         if not file.is_open:
             return
         try:

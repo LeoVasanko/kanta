@@ -23,7 +23,7 @@ class ChangeRecord(msgspec.Struct, omit_defaults=True, kw_only=True):
     v: int = 0
     u: str | None = None
     m: datetime | None = None
-    diff: dict
+    diff: dict = {}
 
 
 class Snapshot(msgspec.Struct, omit_defaults=True):

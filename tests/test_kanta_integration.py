@@ -19,6 +19,7 @@ from .support import (
     make_kanta,
     make_migrations_module,
     read_changes,
+    read_last_snapshot,
     seed_single_change,
 )
 
@@ -68,6 +69,27 @@ async def test_new_file_persists_initial_state_for_roundtrip(tmp_path, format_co
     assert kanta2.data.counter == 5
     assert kanta2.data.users["alice"].name == "Alice"
     await kanta2.close()
+
+
+@pytest.mark.asyncio
+async def test_reopen_without_changes_does_not_force_snapshot(
+    tmp_path, format_config
+):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data(counter=5), format_config)
+    await kanta.open()
+    await kanta.close()
+
+    # No snapshot should exist after the initial bootstrap and close.
+    assert read_last_snapshot(path, format_config) is None
+
+    kanta2 = make_kanta(path, Data, format_config)
+    await kanta2.open()
+    assert kanta2.data.counter == 5
+    await kanta2.close()
+
+    # Re-opening without migrations or normalization changes must not force one.
+    assert read_last_snapshot(path, format_config) is None
 
 
 @pytest.mark.asyncio
@@ -475,7 +497,9 @@ async def test_msgspec_normalization_logs_migration(tmp_path, format_config):
 
 
 @pytest.mark.asyncio
-async def test_empty_migration_is_recorded_and_not_reapplied(tmp_path, format_config):
+async def test_empty_migration_writes_snapshot_and_is_not_reapplied(
+    tmp_path, format_config
+):
     path = tmp_path / "test.db"
     seed_single_change(
         path, fixed_change("init", {"counter": 0, "users": {}}), format_config
@@ -491,24 +515,65 @@ async def test_empty_migration_is_recorded_and_not_reapplied(tmp_path, format_co
         kanta = make_kanta(path, Data, format_config, migrations=mod)
         await kanta.open()
         assert kanta.version == 1
-        await kanta.flush()
         await kanta.close()
 
+        # Empty migrations must not produce empty change records.
         records = read_changes(path, format_config)
         migration_records = [r for r in records if r.a.startswith("migrate")]
-        assert len(migration_records) == 1
-        assert migration_records[0].v == 1
-        assert migration_records[0].diff == {}
+        assert not migration_records
+
+        # The version bump is persisted via a snapshot instead.
+        snap = read_last_snapshot(path, format_config)
+        assert snap is not None
+        assert snap.v == 1
+        assert snap.state == {"counter": 0, "users": {}}
 
         kanta2 = make_kanta(path, Data, format_config, migrations=mod)
         await kanta2.open()
         assert kanta2.version == 1
         await kanta2.close()
 
+        # Re-opening must not create additional migration records or snapshots.
         records2 = read_changes(path, format_config)
-        assert len([r for r in records2 if r.a.startswith("migrate")]) == 1
+        assert not [r for r in records2 if r.a.startswith("migrate")]
     finally:
         sys.modules.pop("empty_migration_mod", None)
+
+
+@pytest.mark.asyncio
+async def test_migration_with_changes_records_diff_and_snapshot(
+    tmp_path, format_config
+):
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    mod = type(sys)("test_migrations_changes")
+
+    def migrate_v1(d, kanta):
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    kanta = make_kanta(path, Data, format_config, migrations=mod)
+    await kanta.open()
+    assert kanta.version == 1
+    assert kanta.data.counter == 2
+    await kanta.close()
+
+    records = read_changes(path, format_config)
+    migration_records = [r for r in records if r.a.startswith("migrate")]
+    assert len(migration_records) == 2
+    assert migration_records[0].a == "migrate:v1"
+    assert migration_records[0].v == 1
+    assert migration_records[0].diff == {"counter": 2}
+    assert migration_records[1].a == "migrate:msgspec"
+    assert migration_records[1].v == 1
+    assert migration_records[1].diff == {"users": {}}
+
+    snap = read_last_snapshot(path, format_config)
+    assert snap is not None
+    assert snap.v == 1
+    assert snap.state == {"counter": 2, "users": {}}
 
 
 @pytest.mark.asyncio

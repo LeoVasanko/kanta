@@ -7,7 +7,7 @@ from uuid import UUID
 import msgspec
 
 from kanta.kanta import Kanta
-from kanta.structs import ChangeRecord
+from kanta.structs import ChangeRecord, Snapshot
 
 
 class User(msgspec.Struct):
@@ -87,6 +87,17 @@ def make_migrations_module(name: str, fn_name: str, fn):
     mod.__dict__[fn_name] = fn
     sys.modules[name] = mod
     return mod
+
+
+def read_last_snapshot(path: Path, format_config) -> Snapshot | None:
+    _, serializer_cls = format_config
+    serializer = serializer_cls()
+    framer = serializer.framer_cls()
+    data = path.read_bytes()
+    payload, _, _ = framer.scan_last_snapshot(data)
+    if payload is None:
+        return None
+    return serializer.decode(payload, type=Snapshot)
 
 
 def fixed_change(action: str, diff: dict, *, version: int = 0) -> ChangeRecord:
