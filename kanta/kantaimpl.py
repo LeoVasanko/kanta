@@ -12,7 +12,7 @@ from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.migrate import MigrationRegistry
+from kanta.migrations import Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
 from kanta.serialization.base import replay
@@ -28,18 +28,18 @@ class KantaImpl(PersistenceMixin, Generic[T]):
     def __init__(self, **kwargs: Any):
         self.data_type = kwargs.pop("type")
         self.data: T = kwargs.pop("data")
-        self.migrations = kwargs.pop("migrations", None)
         self._kanta = kwargs.pop("kanta", None)
+        migrations = kwargs.pop("migrations", None)
         self.ctx = SimpleNamespace()
         super().__init__(**kwargs)
-        self.migration_registry: MigrationRegistry | None = None
-        if self.migrations is not None:
+        self.migrations: Migrations | None = None
+        if migrations is not None:
             module = (
-                importlib.import_module(self.migrations)
-                if isinstance(self.migrations, str)
-                else self.migrations
+                importlib.import_module(migrations)
+                if isinstance(migrations, str)
+                else migrations
             )
-            self.migration_registry = MigrationRegistry.from_module(module)
+            self.migrations = Migrations.from_module(module)
 
         self.in_transaction = False
         self.transaction_snapshot: dict[str, Any] | None = None
@@ -55,9 +55,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         )
 
         self.statedict = struct_to_dict(self.data, serializer=self.serializer)
-        self.version = (
-            self.migration_registry.dbver if self.migration_registry is not None else 0
-        )
+        self.version = self.migrations.dbver if self.migrations is not None else 0
 
     def add_bootstrap(
         self,
@@ -141,10 +139,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     cause_type=type(e).__name__,
                 ) from e
 
-            if self.migration_registry is not None:
-                rr.version = self.migration_registry.apply(
-                    rr.state, rr.version, self._kanta
-                )
+            if self.migrations is not None:
+                rr.version = self.migrations.apply(rr.state, rr.version, self._kanta)
 
             self.statedict = copy.deepcopy(rr.state)
             self.data = restore_data_in_place(

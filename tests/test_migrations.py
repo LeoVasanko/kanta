@@ -1,6 +1,6 @@
 from types import ModuleType, SimpleNamespace
 
-from kanta.migrate import MigrationRegistry
+from kanta.migrations import Migrations
 
 
 class _DummyKanta:
@@ -9,7 +9,7 @@ class _DummyKanta:
 
 
 def test_register_and_apply():
-    reg = MigrationRegistry()
+    reg = Migrations()
     kanta = _DummyKanta()
 
     @reg.register
@@ -27,7 +27,7 @@ def test_register_and_apply():
 
 
 def test_no_migrations_needed():
-    reg = MigrationRegistry()
+    reg = Migrations()
     kanta = _DummyKanta()
 
     @reg.register
@@ -52,7 +52,7 @@ def test_from_module():
     mod.__dict__["migrate_v1"] = migrate_v1
     mod.__dict__["migrate_v2"] = migrate_v2
 
-    reg = MigrationRegistry.from_module(mod)
+    reg = Migrations.from_module(mod)
     assert reg.dbver == 2
 
     state = {}
@@ -62,7 +62,7 @@ def test_from_module():
 
 
 def test_migrations_can_use_kanta_ctx():
-    reg = MigrationRegistry()
+    reg = Migrations()
     kanta = _DummyKanta()
 
     @reg.register
@@ -78,7 +78,7 @@ def test_migrations_can_use_kanta_ctx():
 
 
 def test_migration_can_omit_kanta_argument():
-    reg = MigrationRegistry()
+    reg = Migrations()
     kanta = _DummyKanta()
 
     @reg.register

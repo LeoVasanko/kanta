@@ -14,29 +14,33 @@ from typing import Any
 
 _logger = logging.getLogger(__name__)
 
+# Cache registries by imported module object so that many Kanta instances using
+# the same migrations module do not re-scan it each time.
+_module_registry_cache: dict[ModuleType, Migrations] = {}
 
-class MigrationRegistry:
+
+class Migrations:
     """Registry of schema migration functions.
 
     Usage::
 
-        registry = MigrationRegistry()
+        migrations = Migrations()
 
-        @registry.register
+        @migrations.register
         def migrate_v1(d: dict, kanta) -> None:
             d.setdefault("version", 1)
             kanta.ctx.note = "migrated"
 
-        @registry.register
+        @migrations.register
         def migrate_v2(d: dict) -> None:
             d.setdefault("version", 2)
 
-        new_version = registry.apply(state, current_version=0, kanta=kanta)
+        new_version = migrations.apply(state, current_version=0, kanta=kanta)
 
     Or load from a module::
 
-        registry = MigrationRegistry.from_module("myapp.migrations")
-        new_version = registry.apply(state, current_version=0, kanta=kanta)
+        migrations = Migrations.from_module("myapp.migrations")
+        new_version = migrations.apply(state, current_version=0, kanta=kanta)
     """
 
     def __init__(self) -> None:
@@ -59,24 +63,30 @@ class MigrationRegistry:
         return fn
 
     @classmethod
-    def from_module(cls, module: str | ModuleType) -> MigrationRegistry:
-        """Create a registry by scanning a module for ``migrate_vN`` functions.
+    def from_module(cls, module: str | ModuleType) -> Migrations:
+        """Create or retrieve a cached registry by scanning a module.
 
         Args:
             module: A module name (string) or an imported module object.
         """
-        reg = cls()
         if isinstance(module, str):
             mod = importlib.import_module(module)
         else:
             mod = module
 
+        try:
+            return _module_registry_cache[mod]
+        except KeyError:
+            pass
+
+        reg = cls()
         for name in dir(mod):
             if name.startswith("migrate_v"):
                 fn = getattr(mod, name)
                 if callable(fn):
                     version = reg._migration_version(fn)
                     reg._migrations[version] = fn
+        _module_registry_cache[mod] = reg
         return reg
 
     @property
