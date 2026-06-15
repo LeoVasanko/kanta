@@ -70,6 +70,18 @@ def change_actions(path: Path, format_config) -> list[str]:
     return actions
 
 
+def read_changes(path: Path, format_config) -> list[ChangeRecord]:
+    _, serializer_cls = format_config
+    serializer = serializer_cls()
+    framer = serializer.framer_cls()
+    records: list[ChangeRecord] = []
+    for is_snapshot, payload, _, _ in framer.iter_records(path.read_bytes(), 0):
+        if is_snapshot:
+            continue
+        records.append(serializer.decode(payload, type=ChangeRecord))
+    return records
+
+
 def make_migrations_module(name: str, fn_name: str, fn):
     mod = ModuleType(name)
     mod.__dict__[fn_name] = fn

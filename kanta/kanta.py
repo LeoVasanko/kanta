@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from kanta.kantaimpl import KantaImpl
 from kanta.serialization import JsonSerializer, Serializer

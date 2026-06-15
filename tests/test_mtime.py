@@ -82,8 +82,9 @@ async def test_transaction_mtime_false_preserves_mtime(tmp_path, format_config):
             continue
         records.append(serializer.decode(payload, type=ChangeRecord))
 
-    assert records[0].m == first_m
-    assert records[1].m is None
+    assert records[0].a == "bootstrap"
+    assert records[1].m == first_m
+    assert records[2].m is None
     assert kanta.mtime == first_m
 
 

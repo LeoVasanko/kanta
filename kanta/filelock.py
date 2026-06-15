@@ -129,7 +129,9 @@ class LockedFile:
         else:
             self._open_unix(path, create, readonly)
 
-    def open_and_read(self, path: Path, create: bool = False, readonly: bool = False) -> bytes:
+    def open_and_read(
+        self, path: Path, create: bool = False, readonly: bool = False
+    ) -> bytes:
         """Open *path* and read all content.
 
         Combined operation for efficient use with asyncio.to_thread().

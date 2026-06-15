@@ -133,7 +133,11 @@ when they have a default value.
 
 #### Bootstrap Callbacks
 
-- Bootstrap callbacks run during `open()` when the database is empty.
+- When `open()` creates a new database, it always writes a single bootstrap
+  `ChangeRecord`.
+- The simplest bootstrap is the initial data object passed to `Kanta(...)`;
+  bootstrap callbacks are optional and only needed when you want to modify or
+  enrich that object at creation time.
 - Register callbacks via:
   - `@kanta.bootstrap`
   - `@kanta.bootstrap(action=..., user=..., mtime=...)`
@@ -146,6 +150,8 @@ when they have a default value.
   - exactly one bootstrap `ChangeRecord` is queued,
   - bootstrap metadata (`action`, `user`, `mtime`) is taken from the last
     callback registration.
+- If no bootstrap callbacks are registered, the bootstrap record still uses
+  `action="bootstrap"` and contains the initial data object.
 - If any bootstrap callback raises, Kanta closes and removes the database file,
   then re-raises the exception.
 

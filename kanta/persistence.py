@@ -109,6 +109,7 @@ class PersistenceMixin:
         *,
         user: str | None = None,
         mtime: bool | datetime = True,
+        force: bool = False,
     ) -> ChangeRecord | None:
         """Queue a change record internally (thread-safe).
 
@@ -121,9 +122,11 @@ class PersistenceMixin:
                 previous modification time remains in effect; this is used for
                 system operations that are not considered modifications. A
                 :class:`~datetime.datetime` value sets ``m`` to that explicit time.
+            force: If ``True``, queue the record even when the diff is empty.
 
         Returns:
-            The queued :class:`ChangeRecord`, or ``None`` if the diff was empty.
+            The queued :class:`ChangeRecord`, or ``None`` if the diff was empty
+            and *force* is ``False``.
         """
         now = datetime.now(UTC)
 
@@ -137,7 +140,7 @@ class PersistenceMixin:
             raise TypeError("mtime must be True, False, or a datetime")
 
         diff = compute_diff(self.statedict, current)
-        if not diff:
+        if not diff and not force:
             return None
 
         record = ChangeRecord(

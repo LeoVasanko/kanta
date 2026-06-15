@@ -172,19 +172,22 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 db_path=self.filename,
                 action="open",
             )
-        elif self.callback_registry.has("bootstrap"):
+        else:
             try:
-                await self.callback_registry.invoke(
-                    "bootstrap",
-                    InjectionContext(data=self.data, kanta=self._kanta),
-                )
+                if self.callback_registry.has("bootstrap"):
+                    await self.callback_registry.invoke(
+                        "bootstrap",
+                        InjectionContext(data=self.data, kanta=self._kanta),
+                    )
 
+                self.statedict = {}
                 current = struct_to_dict(self.data, serializer=self.serializer)
                 self.queue_change(
                     self.bootstrap_action,
                     current,
                     user=self.bootstrap_user,
                     mtime=self.bootstrap_mtime,
+                    force=True,
                 )
             except Exception:
                 self.file.close()

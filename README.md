@@ -53,10 +53,13 @@ asyncio.run(main())
 
 ## Bootstrap and Open Modes
 
-Kanta supports open-time bootstrap callbacks for initializing a brand-new
-database before `open()` returns.
+When `open()` creates a brand-new database, it always writes a single bootstrap
+change record from the initial data object you passed to `Kanta(...)`. The
+simplest bootstrap is therefore the object itself — no extra code is required.
 
-Register bootstrap handlers with a decorator:
+Bootstrap handlers are optional. Use them only when you need to modify the
+initial state at creation time, for example to seed defaults or perform
+expensive/external setup that should happen exactly once:
 
 ```python
 kanta = Kanta("data.kantadb", Data())
@@ -76,9 +79,10 @@ async def bootstrap_async(data) -> None:
     data.counter = 1
 ```
 
-When multiple bootstrap handlers are registered:
+Whether or not handlers are registered, exactly one bootstrap change record is
+written when a new database is created. The record contains the initial object,
+or the state after all bootstrap handlers have run. When handlers are present:
 - they run in registration order,
-- exactly one bootstrap change record is queued,
 - bootstrap metadata (`action`, `user`, `mtime`) is taken from the last
   registration.
 

@@ -17,6 +17,7 @@ from .support import (
     change_actions,
     fixed_change,
     make_kanta,
+    read_changes,
     seed_single_change,
 )
 
@@ -28,6 +29,44 @@ async def test_load_empty(tmp_path, format_config):
     assert isinstance(kanta.data, Data)
     assert kanta.data.users == {}
     await kanta.close()
+
+
+@pytest.mark.asyncio
+async def test_new_file_writes_bootstrap_record_without_handlers(
+    tmp_path, format_config
+):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+    await kanta.close()
+
+    records = read_changes(path, format_config)
+    assert len(records) == 1
+    assert records[0].a == "bootstrap"
+    assert records[0].diff == {"$replace": {"users": {}, "counter": 0}}
+
+
+@pytest.mark.asyncio
+async def test_new_file_persists_initial_state_for_roundtrip(tmp_path, format_config):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(
+        path, Data(counter=5, users={"alice": User(name="Alice")}), format_config
+    )
+    await kanta.open()
+    await kanta.close()
+
+    records = read_changes(path, format_config)
+    assert len(records) == 1
+    assert records[0].a == "bootstrap"
+    assert records[0].diff == {
+        "$replace": {"users": {"alice": {"name": "Alice", "age": 0}}, "counter": 5}
+    }
+
+    kanta2 = make_kanta(path, Data, format_config)
+    await kanta2.open()
+    assert kanta2.data.counter == 5
+    assert kanta2.data.users["alice"].name == "Alice"
+    await kanta2.close()
 
 
 @pytest.mark.asyncio
