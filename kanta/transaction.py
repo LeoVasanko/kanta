@@ -9,7 +9,7 @@ from datetime import datetime
 from kanta.diff import compute_diff
 from kanta.exceptions import DataIntegrityError
 from kanta.callbacks import InjectionContext
-from kanta.logging import _USER_PATH, log_change
+from kanta.logging import _USER_PATH, changes_logger, log_change
 from kanta.serialization import restore_data_in_place, struct_to_dict
 
 _logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ def transaction(
     *,
     user: str | None = None,
     mtime: bool | datetime = True,
+    log: bool | logging.Logger = True,
 ):
     """Wrap writes in a transaction and yield the live db object."""
     if impl.readonly:
@@ -80,7 +81,16 @@ def transaction(
                     resolved = logfmt(user, _USER_PATH)
                     if resolved is not None:
                         formatted_user = resolved
-                log_change(action, record.diff, formatted_user, previous, logfmt)
+                if log is not False:
+                    logger = log if isinstance(log, logging.Logger) else changes_logger
+                    log_change(
+                        action,
+                        record.diff,
+                        formatted_user,
+                        previous,
+                        logfmt,
+                        logger=logger,
+                    )
     except Exception:
         _logger.warning("Transaction '%s' failed, rolling back changes", action)
         if impl.transaction_snapshot is not None:

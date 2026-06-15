@@ -10,7 +10,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-logger = logging.getLogger("kanta.changes")
+changes_logger = logging.getLogger("kanta.changes")
+migration_logger = logging.getLogger("kanta.migrations")
 
 # Pattern to match control characters and bidirectional overrides
 _UNSAFE_CHARS = re.compile(
@@ -274,6 +275,9 @@ def log_change(
     user: str | None = None,
     previous: dict | None = None,
     logfmt: Callable[[Any, str], str | None] | None = None,
+    *,
+    logger: logging.Logger = changes_logger,
+    level: int = logging.INFO,
 ) -> None:
     """Log a database change with pretty-printed diff.
 
@@ -283,27 +287,29 @@ def log_change(
         user: Optional already-formatted user name to show in the header.
         previous: The previous state dict (for determining add vs update).
         logfmt: Optional formatter callable ``(value, path) -> str | None``.
+        logger: Logger to write to. Defaults to the ``kanta.changes`` logger.
+        level: Log level to use. Defaults to ``logging.INFO``.
     """
     header = format_action_header(action, user)
     diff_lines = format_diff(diff, previous, logfmt)
 
     if not diff_lines:
-        logger.info(header)
+        logger.log(level, header)
         return
 
     if len(diff_lines) == 1:
-        logger.info(f"{header}{diff_lines[0]}")
+        logger.log(level, f"{header}{diff_lines[0]}")
     else:
-        logger.info(header)
+        logger.log(level, header)
         for line in diff_lines:
-            logger.info(line)
+            logger.log(level, line)
 
 
 def configure_logging() -> None:
     """Configure the database logger to output to stderr without prefix."""
-    if not logger.handlers:
+    if not changes_logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
+        changes_logger.addHandler(handler)
+    changes_logger.setLevel(logging.INFO)
+    changes_logger.propagate = False

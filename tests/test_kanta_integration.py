@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sys
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -6,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from kanta.exceptions import DatabaseError, DataIntegrityError, FileLockError
+from kanta.migrations import MigrationResult
 from kanta.serialization import struct_to_dict
 
 from .support import (
@@ -72,9 +74,7 @@ async def test_new_file_persists_initial_state_for_roundtrip(tmp_path, format_co
 
 
 @pytest.mark.asyncio
-async def test_reopen_without_changes_does_not_force_snapshot(
-    tmp_path, format_config
-):
+async def test_reopen_without_changes_does_not_force_snapshot(tmp_path, format_config):
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data(counter=5), format_config)
     await kanta.open()
@@ -574,6 +574,123 @@ async def test_migration_with_changes_records_diff_and_snapshot(
     assert snap is not None
     assert snap.v == 1
     assert snap.state == {"counter": 2, "users": {}}
+
+
+@pytest.mark.asyncio
+async def test_migration_summary_log_includes_filename(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    mod = type(sys)("test_migrations_log")
+
+    def migrate_v1(d, kanta):
+        """Bump counter."""
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+        kanta = make_kanta(path, Data, format_config, migrations=mod)
+        await kanta.open()
+        assert kanta.version == 1
+        await kanta.close()
+
+    info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_messages) == 1
+    assert str(path) in info_messages[0]
+    assert "v0 -> v1" in info_messages[0]
+    assert "migrate_v1 (Bump counter)" in info_messages[0]
+
+
+@pytest.mark.asyncio
+async def test_open_log_false_suppresses_migration_log(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    mod = type(sys)("test_migrations_silent")
+
+    def migrate_v1(d, kanta):
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+        kanta = make_kanta(path, Data, format_config, migrations=mod)
+        await kanta.open(log=False)
+        await kanta.close()
+
+    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert not info_messages
+
+
+@pytest.mark.asyncio
+async def test_logmigr_callback_replaces_default_logging(
+    tmp_path, format_config, caplog
+):
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    mod = type(sys)("test_migrations_callback")
+
+    def migrate_v1(d, kanta):
+        """Bump counter."""
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    summaries = []
+
+    kanta = make_kanta(path, Data, format_config, migrations=mod)
+
+    @kanta.logmigr
+    def collect(summary: MigrationResult):
+        summaries.append(summary)
+
+    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+        await kanta.open()
+        await kanta.close()
+
+    assert len(summaries) == 1
+    assert summaries[0].version == 1
+    assert summaries[0].migrations[0].name == "migrate_v1"
+    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert not info_messages
+
+
+@pytest.mark.asyncio
+async def test_transaction_log_false_suppresses_log(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+        with kanta.transaction(action="inc", log=False) as data:
+            data.counter = 1
+
+    await kanta.close()
+
+    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert not info_messages
+
+
+@pytest.mark.asyncio
+async def test_transaction_log_custom_logger(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    custom_logger = logging.getLogger("custom.transaction")
+    custom_logger.setLevel(logging.INFO)
+
+    with caplog.at_level(logging.INFO, logger="custom.transaction"):
+        with kanta.transaction(action="inc", log=custom_logger) as data:
+            data.counter = 1
+
+    await kanta.close()
+
+    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_messages) >= 1
+    assert "inc" in info_messages[0].message
 
 
 @pytest.mark.asyncio

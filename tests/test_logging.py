@@ -1,16 +1,15 @@
 import logging
 
-from kanta.logging import configure_logging, log_change
-from kanta.logging import logger
+from kanta.logging import changes_logger, configure_logging, log_change
 
 
 def test_configure_logging():
     configure_logging()
-    assert logger.level == logging.INFO
+    assert changes_logger.level == logging.INFO
 
 
 def test_log_change_no_diff(capsys):
-    logger.handlers.clear()
+    changes_logger.handlers.clear()
     configure_logging()
     log_change("test", {})
     captured = capsys.readouterr()

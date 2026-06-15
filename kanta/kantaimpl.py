@@ -12,7 +12,8 @@ from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.migrations import Migrations
+from kanta.logging import log_change, migration_logger
+from kanta.migrations import MigrationResult, Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
 from kanta.serialization.base import replay
@@ -75,7 +76,64 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         """Register one transaction logfmt callback."""
         self.callback_registry.register("logfmt", callback, path=path)
 
-    async def open(self, *, create: bool = True, readonly: bool = False) -> None:
+    def add_logmigr(self, callback) -> None:
+        """Register one migration logging callback."""
+        self.callback_registry.register("logmigr", callback)
+
+    async def _handle_migration_log(
+        self,
+        migration_result: MigrationResult,
+        previous_version: int,
+        log: bool | logging.Logger,
+    ) -> None:
+        """Route migration logging to callback or default logger."""
+        assert isinstance(migration_result, MigrationResult)
+
+        if self.callback_registry.has("logmigr"):
+            await self.callback_registry.invoke(
+                "logmigr",
+                InjectionContext(
+                    kanta=self._kanta,
+                    migration_result=migration_result,
+                ),
+            )
+            return
+
+        if log is False:
+            return
+
+        migration_log = log if isinstance(log, logging.Logger) else migration_logger
+
+        changed = [m for m in migration_result.migrations if m.changed]
+        if not changed:
+            return
+
+        for info in changed:
+            if info.diff:
+                log_change(
+                    info.name,
+                    info.diff,
+                    previous=info.before,
+                    logger=migration_log,
+                    level=logging.DEBUG,
+                )
+
+        descriptions = [f"{m.name} ({m.description})" for m in changed]
+        migration_log.info(
+            "Migrated %s v%s -> v%s: %s",
+            self.filename,
+            previous_version,
+            migration_result.version,
+            ", ".join(descriptions),
+        )
+
+    async def open(
+        self,
+        *,
+        create: bool = True,
+        readonly: bool = False,
+        log: bool | logging.Logger = True,
+    ) -> None:
         """Open the database: load from disk, apply migrations, start background task."""
         if self.opened:
             raise DataIntegrityError(
@@ -142,13 +200,21 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     cause_type=type(e).__name__,
                 ) from e
 
-            migrations_ran = False
+            migration_result = None
             state_before_migrations = None
+            previous_version = rr.version
             if self.migrations is not None:
-                previous_version = rr.version
                 state_before_migrations = copy.deepcopy(rr.state)
-                rr.version = self.migrations.apply(rr.state, rr.version, self._kanta)
-                migrations_ran = rr.version != previous_version
+                migration_result = self.migrations.apply(
+                    rr.state, rr.version, self._kanta
+                )
+                rr.version = migration_result.version
+
+            migrations_ran = rr.version != previous_version
+            migration_state_changed = (
+                state_before_migrations is not None
+                and state_before_migrations != rr.state
+            )
 
             self.snapshot.ts = (
                 datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
@@ -173,9 +239,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
             else:
-                migration_record = None
-                if migrations_ran and self.statedict != rr.state:
-                    migration_record = self.queue_change(
+                if migrations_ran and migration_state_changed:
+                    self.queue_change(
                         f"migrate:v{self.version}",
                         rr.state,
                         mtime=False,
@@ -188,6 +253,11 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     await self.flush()
                     self.snapshot.maybe_write(
                         self.file, self.version, self.statedict, m=self.mtime
+                    )
+
+                if migrations_ran and migration_result is not None:
+                    await self._handle_migration_log(
+                        migration_result, previous_version, log
                     )
         elif self.readonly:
             self.opened = False

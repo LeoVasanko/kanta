@@ -1,6 +1,7 @@
 """Kanta DB main public API"""
 
 from __future__ import annotations
+import logging
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -144,7 +145,13 @@ class Kanta(Generic[T]):
         """
         return self._impl.mtime
 
-    async def open(self, *, create: bool = True, readonly: bool = False) -> None:
+    async def open(
+        self,
+        *,
+        create: bool = True,
+        readonly: bool = False,
+        log: bool | logging.Logger = True,
+    ) -> None:
         """Open the database file and start background persistence.
 
         This loads existing records, applies configured migrations, and starts
@@ -156,6 +163,11 @@ class Kanta(Generic[T]):
             readonly: If True, open the database read-only. No lock is acquired,
                 no background flush task is started, and transactions are
                 rejected. The file is not created if missing.
+            log: Controls migration logging. ``True`` (default) uses the
+                ``kanta.migrations`` logger. ``False`` suppresses the default
+                migration log. A :class:`~logging.Logger` instance writes
+                default migration output to that logger instead. Custom
+                ``@kanta.logmigr`` callbacks run regardless of this setting.
 
         Calling ``open`` more than once on the same instance is not allowed.
 
@@ -163,7 +175,7 @@ class Kanta(Generic[T]):
             kanta.exceptions.DatabaseError: If replay or decoding fails.
             kanta.exceptions.DataIntegrityError: If the instance is already open.
         """
-        await self._impl.open(create=create, readonly=readonly)
+        await self._impl.open(create=create, readonly=readonly, log=log)
 
     async def __aenter__(self) -> Kanta[T]:
         """Enter async context manager and open the database.
@@ -239,6 +251,24 @@ class Kanta(Generic[T]):
             return _register
         return _register(fn)
 
+    def logmigr(self, fn=None):
+        """Register a migration logging callback.
+
+        Can be used as ``@kanta.logmigr``.
+        The callback receives a :class:`kanta.migrations.MigrationResult` and
+        may be sync or async. If registered, it replaces the default migration
+        logger output; the application is responsible for emitting any log
+        messages.
+        """
+
+        def _register(callback):
+            self._impl.add_logmigr(callback)
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
     def logfmt(self, fn=None, *, path: str | None = None):
         """Register a transaction logfmt callback.
 
@@ -266,6 +296,7 @@ class Kanta(Generic[T]):
         *,
         user: str | None = None,
         mtime: bool | datetime = True,
+        log: bool | logging.Logger = True,
     ):
         """Create a transactional mutation context manager.
 
@@ -280,6 +311,10 @@ class Kanta(Generic[T]):
                 system operations that are not considered modifications. A
                 :class:`~datetime.datetime` value sets ``m`` to that explicit
                 time.
+            log: Controls transaction logging. ``True`` (default) uses the
+                ``kanta.changes`` logger. ``False`` suppresses the transaction
+                log. A :class:`~logging.Logger` instance writes output to that
+                logger instead.
 
         Returns:
             A context manager yielding the live state object for mutation.
@@ -294,4 +329,5 @@ class Kanta(Generic[T]):
             action,
             user=user,
             mtime=mtime,
+            log=log,
         )

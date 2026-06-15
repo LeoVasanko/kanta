@@ -1,4 +1,3 @@
-import logging
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -25,8 +24,8 @@ def test_register_and_apply():
         d["version"] = 2
 
     state = {}
-    new_ver = reg.apply(state, current_version=0, kanta=kanta, silent=True)
-    assert new_ver == 2
+    result = reg.apply(state, current_version=0, kanta=kanta)
+    assert result.version == 2
     assert state["version"] == 2
 
 
@@ -39,8 +38,8 @@ def test_no_migrations_needed():
         d["x"] = 1
 
     state = {"x": 1}
-    new_ver = reg.apply(state, current_version=1, kanta=kanta, silent=True)
-    assert new_ver == 1
+    result = reg.apply(state, current_version=1, kanta=kanta)
+    assert result.version == 1
 
 
 def test_from_module():
@@ -60,8 +59,8 @@ def test_from_module():
     assert reg.dbver == 2
 
     state = {}
-    new_ver = reg.apply(state, current_version=0, kanta=kanta, silent=True)
-    assert new_ver == 2
+    result = reg.apply(state, current_version=0, kanta=kanta)
+    assert result.version == 2
     assert state["v"] == 2
 
 
@@ -75,8 +74,8 @@ def test_migrations_can_use_kanta_ctx():
         d["source"] = kanta.ctx.source
 
     state = {}
-    new_ver = reg.apply(state, current_version=0, kanta=kanta, silent=True)
-    assert new_ver == 1
+    result = reg.apply(state, current_version=0, kanta=kanta)
+    assert result.version == 1
     assert state["source"] == "migration"
     assert kanta.ctx.source == "migration"
 
@@ -90,8 +89,8 @@ def test_migration_can_omit_kanta_argument():
         d["x"] = 1
 
     state = {}
-    new_ver = reg.apply(state, current_version=0, kanta=kanta, silent=True)
-    assert new_ver == 1
+    result = reg.apply(state, current_version=0, kanta=kanta)
+    assert result.version == 1
     assert state["x"] == 1
 
 
@@ -107,7 +106,7 @@ def test_version_too_new():
         DatabaseError,
         match="Database version v2 is newer than the highest supported version v1",
     ):
-        reg.apply({}, current_version=2, kanta=kanta, silent=True)
+        reg.apply({}, current_version=2, kanta=kanta)
 
 
 def test_version_too_old():
@@ -122,7 +121,7 @@ def test_version_too_old():
         DatabaseError,
         match="Database version v1 is older than the minimum supported version v2",
     ):
-        reg.apply({}, current_version=1, kanta=kanta, silent=True)
+        reg.apply({}, current_version=1, kanta=kanta)
 
 
 def test_missing_middle_migration_is_skipped():
@@ -138,8 +137,8 @@ def test_missing_middle_migration_is_skipped():
         d["y"] = 3
 
     state = {"x": 1}
-    new_ver = reg.apply(state, current_version=1, kanta=kanta, silent=True)
-    assert new_ver == 3
+    result = reg.apply(state, current_version=1, kanta=kanta)
+    assert result.version == 3
     assert state["x"] == 1
     assert state["y"] == 3
 
@@ -153,12 +152,12 @@ def test_old_migrations_deleted_current_supported():
         d["x"] = 3
 
     state = {"x": 2}
-    new_ver = reg.apply(state, current_version=2, kanta=kanta, silent=True)
-    assert new_ver == 3
+    result = reg.apply(state, current_version=2, kanta=kanta)
+    assert result.version == 3
     assert state["x"] == 3
 
 
-def test_migration_log_only_when_changed(caplog):
+def test_apply_returns_change_information():
     reg = Migrations()
     kanta = _DummyKanta()
 
@@ -177,28 +176,33 @@ def test_migration_log_only_when_changed(caplog):
         """Set y."""
         d["y"] = 3
 
-    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
-        reg.apply({}, current_version=0, kanta=kanta)
+    result = reg.apply({}, current_version=0, kanta=kanta)
+    assert result.version == 3
+    assert len(result.migrations) == 3
 
-    messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    assert len(messages) == 2
-    assert "migrate_v1" in messages[0]
-    assert "Set x" in messages[0]
-    assert "migrate_v3" in messages[1]
-    assert "Set y" in messages[1]
+    assert result.migrations[0].name == "migrate_v1"
+    assert result.migrations[0].description == "Set x"
+    assert result.migrations[0].changed is True
+    assert result.migrations[0].diff == {"$replace": {"x": 1}}
+
+    assert result.migrations[1].name == "migrate_v2"
+    assert result.migrations[1].description == "No-op"
+    assert result.migrations[1].changed is False
+    assert result.migrations[1].diff is None
+
+    assert result.migrations[2].name == "migrate_v3"
+    assert result.migrations[2].description == "Set y"
+    assert result.migrations[2].changed is True
+    assert result.migrations[2].diff == {"y": 3}
 
 
-def test_no_op_migration_produces_no_log(caplog):
+def test_description_defaults_to_version_when_no_docstring():
     reg = Migrations()
     kanta = _DummyKanta()
 
     @reg.register
     def migrate_v1(d):
-        """No-op."""
-        pass
+        d["x"] = 1
 
-    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
-        reg.apply({}, current_version=0, kanta=kanta)
-
-    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
-    assert not info_messages
+    result = reg.apply({}, current_version=0, kanta=kanta)
+    assert result.migrations[0].description == "v1"

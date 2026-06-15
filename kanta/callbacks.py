@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Union, get_args, get_origin
 
 from kanta.exceptions import DatabaseError
+from kanta.migrations import MigrationResult
 
 DictPre = Annotated[dict, "pre"]
 DictPost = Annotated[dict, "post"]
@@ -59,6 +60,7 @@ class InjectionContext:
     error: DatabaseError | None = None
     previous_state: dict | None = None
     current_state: dict | None = None
+    migration_result: MigrationResult | None = None
 
 
 @dataclass
@@ -98,6 +100,7 @@ class CallbackRegistry:
         self._callbacks: dict[str, list[_CallbackRegistration]] = {
             "bootstrap": [],
             "fatal_error": [],
+            "logmigr": [],
         }
         self._logfmt_callbacks: list[_LogFmtFunctionSpec | _LogFmtClassSpec] = []
 
@@ -446,10 +449,12 @@ class CallbackRegistry:
             return kind == "logfmt"
         if bare is DatabaseError:
             return kind == "fatal_error"
+        if bare is MigrationResult:
+            return kind == "logmigr"
         if self._data_type is not None and bare is self._data_type:
             return kind == "bootstrap"
         if self._kanta_class is not None and bare is self._kanta_class:
-            return kind in {"bootstrap", "fatal_error", "logfmt"}
+            return kind in {"bootstrap", "fatal_error", "logfmt", "logmigr"}
         return False
 
     def _allowed_message(self, kind: str) -> str:
@@ -462,6 +467,8 @@ class CallbackRegistry:
                 parts.append(self._kanta_class.__name__)
         if kind == "fatal_error":
             parts.append("DatabaseError")
+        if kind == "logmigr":
+            parts.append("MigrationResult")
         if kind == "logfmt":
             parts.append("Annotated[dict, 'pre']")
             parts.append("Annotated[dict, 'post']")
@@ -475,6 +482,8 @@ class CallbackRegistry:
             return ctx.current_state
         if bare is DatabaseError:
             return ctx.error
+        if bare is MigrationResult:
+            return ctx.migration_result
         if self._data_type is not None and bare is self._data_type:
             return ctx.data
         if self._kanta_class is not None and bare is self._kanta_class:

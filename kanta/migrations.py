@@ -9,17 +9,36 @@ from __future__ import annotations
 import copy
 import importlib
 import inspect
-import logging
+from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
+from kanta.diff import compute_diff
 from kanta.exceptions import DatabaseError
-
-_logger = logging.getLogger(__name__)
 
 # Cache registries by imported module object so that many Kanta instances using
 # the same migrations module do not re-scan it each time.
 _module_registry_cache: dict[ModuleType, Migrations] = {}
+
+
+@dataclass
+class MigrationInfo:
+    """Information about a single migration that ran."""
+
+    name: str
+    description: str
+    version: int
+    changed: bool
+    diff: dict | None = None
+    before: dict | None = None
+
+
+@dataclass
+class MigrationResult:
+    """Result of applying migrations."""
+
+    version: int
+    migrations: list[MigrationInfo]
 
 
 class Migrations:
@@ -38,12 +57,13 @@ class Migrations:
         def migrate_v2(d: dict) -> None:
             d.setdefault("version", 2)
 
-        new_version = migrations.apply(state, current_version=0, kanta=kanta)
+        result = migrations.apply(state, current_version=0, kanta=kanta)
+        new_version = result.version
 
     Or load from a module::
 
         migrations = Migrations.from_module("myapp.migrations")
-        new_version = migrations.apply(state, current_version=0, kanta=kanta)
+        result = migrations.apply(state, current_version=0, kanta=kanta)
     """
 
     def __init__(self) -> None:
@@ -117,9 +137,7 @@ class Migrations:
         data_dict: dict[str, Any],
         current_version: int,
         kanta: Any,
-        *,
-        silent: bool = False,
-    ) -> int:
+    ) -> MigrationResult:
         """Apply pending migrations to *data_dict* in place.
 
         Missing intermediate migration steps are silently skipped.
@@ -128,7 +146,8 @@ class Migrations:
             DatabaseError: If the database version is newer than the highest
                 supported version or older than the minimum supported version.
 
-        Returns the new version after all migrations.
+        Returns a :class:`MigrationResult` describing the new version and every
+        migration that ran.
         """
         if current_version > self.dbver:
             raise DatabaseError(
@@ -141,14 +160,25 @@ class Migrations:
                 f"minimum supported version v{self.minver}"
             )
 
+        migrations: list[MigrationInfo] = []
         for version in sorted(self._migrations.keys()):
             if version <= current_version:
                 continue
             fn = self._migrations[version]
-            before = copy.deepcopy(data_dict) if not silent else None
+            before = copy.deepcopy(data_dict)
             self._call_migration(fn, data_dict, kanta)
             current_version = version
-            if not silent and before != data_dict:
-                desc = (fn.__doc__ or fn.__name__).split("\n")[0].rstrip(".")
-                _logger.info("Applied migration %s: %s", fn.__name__, desc)
-        return current_version
+            changed = before != data_dict
+            diff = compute_diff(before, data_dict) if changed else None
+            desc = (fn.__doc__ or f"v{version}").split("\n")[0].rstrip(".")
+            migrations.append(
+                MigrationInfo(
+                    name=fn.__name__,
+                    description=desc,
+                    version=version,
+                    changed=changed,
+                    diff=diff,
+                    before=before,
+                )
+            )
+        return MigrationResult(version=current_version, migrations=migrations)
