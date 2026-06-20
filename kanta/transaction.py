@@ -9,7 +9,7 @@ from datetime import datetime
 from kanta.diff import compute_diff
 from kanta.exceptions import DataIntegrityError
 from kanta.callbacks import InjectionContext
-from kanta.logging import _USER_PATH, changes_logger, log_change
+from kanta.logging import _USER_PATH, log_change, transaction_logger
 from kanta.serialization import restore_data_in_place, struct_to_dict
 
 _logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def transaction(
                     if resolved is not None:
                         formatted_user = resolved
                 if log is not False:
-                    logger = log if isinstance(log, logging.Logger) else changes_logger
+                    logger = log if isinstance(log, logging.Logger) else transaction_logger
                     log_change(
                         action,
                         record.diff,

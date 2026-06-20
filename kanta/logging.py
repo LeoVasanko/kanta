@@ -1,7 +1,8 @@
 """Database change logging with pretty-printed diffs.
 
-Provides a logger for JSONL database changes that formats diffs
-in a human-readable path.notation style with color coding.
+Provides loggers for JSONL database changes, bootstrap events, and
+migrations.  Diff output is formatted in a human-readable path notation
+style with color coding.
 """
 
 import logging
@@ -10,8 +11,9 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-changes_logger = logging.getLogger("kanta.changes")
-migration_logger = logging.getLogger("kanta.migrations")
+transaction_logger = logging.getLogger("kanta.transaction")
+bootstrap_logger = logging.getLogger("kanta.bootstrap")
+migration_logger = logging.getLogger("kanta.migration")
 
 # Pattern to match control characters and bidirectional overrides
 _UNSAFE_CHARS = re.compile(
@@ -276,7 +278,7 @@ def log_change(
     previous: dict | None = None,
     logfmt: Callable[[Any, str], str | None] | None = None,
     *,
-    logger: logging.Logger = changes_logger,
+    logger: logging.Logger = transaction_logger,
     level: int = logging.INFO,
 ) -> None:
     """Log a database change with pretty-printed diff.
@@ -287,7 +289,7 @@ def log_change(
         user: Optional already-formatted user name to show in the header.
         previous: The previous state dict (for determining add vs update).
         logfmt: Optional formatter callable ``(value, path) -> str | None``.
-        logger: Logger to write to. Defaults to the ``kanta.changes`` logger.
+        logger: Logger to write to. Defaults to the ``kanta.transaction`` logger.
         level: Log level to use. Defaults to ``logging.INFO``.
     """
     header = format_action_header(action, user)
@@ -305,11 +307,45 @@ def log_change(
             logger.log(level, line)
 
 
-def configure_logging() -> None:
-    """Configure the database logger to output to stderr without prefix."""
-    if not changes_logger.handlers:
+def configure_logging(
+    *,
+    skiproot: bool = True,
+    bootstrap: bool = True,
+    migration: bool = True,
+    transaction: bool = True,
+) -> None:
+    """Configure Kanta's default logging output.
+
+    Args:
+        skiproot: If ``True`` (default), attach a no-prefix stderr handler to
+            the ``kanta`` logger and set ``kanta.propagate = False`` so Kanta
+            output is rendered directly without propagating to the root logger.
+            If ``False``, the child logger enable flags are still applied, but
+            no handler is added and ``kanta`` propagation is left untouched so
+            the application's root logger handles Kanta output.
+        bootstrap: Whether bootstrap logs are enabled.
+        migration: Whether migration logs are enabled.
+        transaction: Whether transaction logs are enabled.
+
+    This helper is not called automatically; applications that want Kanta's
+    default output can call it, but most applications will configure logging
+    themselves.
+    """
+    for name, enabled in (
+        ("kanta.bootstrap", bootstrap),
+        ("kanta.migration", migration),
+        ("kanta.transaction", transaction),
+    ):
+        logging.getLogger(name).propagate = enabled
+
+    if not skiproot:
+        return
+
+    target = logging.getLogger("kanta")
+    target.propagate = False
+
+    if not target.handlers:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(message)s"))
-        changes_logger.addHandler(handler)
-    changes_logger.setLevel(logging.INFO)
-    changes_logger.propagate = False
+        target.addHandler(handler)
+    target.setLevel(logging.INFO)

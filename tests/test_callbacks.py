@@ -148,7 +148,7 @@ async def test_bootstrap_injects_kanta(tmp_path, format_config):
 async def test_logfmt_injects_states(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -170,7 +170,7 @@ async def test_logfmt_injects_states(tmp_path, format_config, caplog):
 async def test_logfmt_class_injection(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -195,7 +195,7 @@ async def test_logfmt_class_injection(tmp_path, format_config, caplog):
 async def test_multiple_logfmt_chain(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -223,7 +223,7 @@ async def test_multiple_logfmt_chain(tmp_path, format_config, caplog):
 async def test_logfmt_path_context(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -247,7 +247,7 @@ async def test_logfmt_path_context(tmp_path, format_config, caplog):
 async def test_logfmt_decorator_path_filters_calls(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -273,7 +273,7 @@ async def test_logfmt_decorator_path_filters_calls(tmp_path, format_config, capl
 async def test_logfmt_user_path_replaces_user_display(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
@@ -295,7 +295,7 @@ async def test_logfmt_user_path_replaces_user_display(tmp_path, format_config, c
 async def test_logfmt_non_string_value(tmp_path, format_config, caplog):
     import logging
 
-    caplog.set_level(logging.INFO, logger="kanta.changes")
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 

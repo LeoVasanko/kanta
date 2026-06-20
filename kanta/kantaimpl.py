@@ -12,7 +12,7 @@ from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.logging import _USER_PATH, changes_logger, log_change, migration_logger
+from kanta.logging import _USER_PATH, bootstrap_logger, log_change, migration_logger
 from kanta.migrations import MigrationResult, Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
@@ -235,6 +235,9 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             )
             self.version = rr.version
             self.mtime = rr.m
+            if log is not False:
+                logger = log if isinstance(log, logging.Logger) else bootstrap_logger
+                logger.debug("Using %s", self.filename.resolve())
             normalized = struct_to_dict(self.data, serializer=self.serializer)
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
@@ -286,7 +289,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 )
 
                 if record is not None and log is not False:
-                    logger = log if isinstance(log, logging.Logger) else changes_logger
+                    logger = log if isinstance(log, logging.Logger) else bootstrap_logger
                     logger.info("Created %s", self.filename.resolve())
                     logfmt = self.callback_registry.build_logfmt(
                         InjectionContext(
@@ -307,6 +310,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                         previous={},
                         logfmt=logfmt,
                         logger=logger,
+                        level=logging.INFO,
                     )
             except Exception:
                 self.opened = False

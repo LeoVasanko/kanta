@@ -589,7 +589,7 @@ async def test_migration_summary_log_includes_filename(tmp_path, format_config, 
 
     mod.__dict__["migrate_v1"] = migrate_v1
 
-    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+    with caplog.at_level(logging.INFO, logger="kanta.migration"):
         kanta = make_kanta(path, Data, format_config, migrations=mod)
         await kanta.open()
         assert kanta.version == 1
@@ -614,7 +614,7 @@ async def test_open_log_false_suppresses_migration_log(tmp_path, format_config, 
 
     mod.__dict__["migrate_v1"] = migrate_v1
 
-    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+    with caplog.at_level(logging.INFO, logger="kanta.migration"):
         kanta = make_kanta(path, Data, format_config, migrations=mod)
         await kanta.open(log=False)
         await kanta.close()
@@ -628,7 +628,7 @@ async def test_open_log_true_logs_bootstrap(tmp_path, format_config, caplog):
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
-    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+    with caplog.at_level(logging.INFO, logger="kanta.bootstrap"):
         await kanta.open()
         await kanta.close()
 
@@ -643,7 +643,7 @@ async def test_open_log_false_suppresses_bootstrap_log(tmp_path, format_config, 
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
 
-    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+    with caplog.at_level(logging.INFO, logger="kanta.bootstrap"):
         await kanta.open(log=False)
         await kanta.close()
 
@@ -670,6 +670,25 @@ async def test_open_log_custom_logger_logs_bootstrap(tmp_path, format_config, ca
 
 
 @pytest.mark.asyncio
+async def test_open_existing_database_logs_using_on_debug(
+    tmp_path, format_config, caplog
+):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+    await kanta.close()
+
+    kanta2 = make_kanta(path, Data, format_config)
+
+    with caplog.at_level(logging.DEBUG, logger="kanta.bootstrap"):
+        await kanta2.open()
+        await kanta2.close()
+
+    debug_messages = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("Using" in m and str(path.resolve()) in m for m in debug_messages)
+
+
+@pytest.mark.asyncio
 async def test_logmigr_callback_replaces_default_logging(
     tmp_path, format_config, caplog
 ):
@@ -692,7 +711,7 @@ async def test_logmigr_callback_replaces_default_logging(
     def collect(summary: MigrationResult):
         summaries.append(summary)
 
-    with caplog.at_level(logging.INFO, logger="kanta.migrations"):
+    with caplog.at_level(logging.INFO, logger="kanta.migration"):
         await kanta.open()
         await kanta.close()
 
@@ -709,7 +728,7 @@ async def test_transaction_log_false_suppresses_log(tmp_path, format_config, cap
     kanta = make_kanta(path, Data, format_config)
     await kanta.open()
 
-    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+    with caplog.at_level(logging.INFO, logger="kanta.transaction"):
         with kanta.transaction(action="inc", log=False) as data:
             data.counter = 1
 

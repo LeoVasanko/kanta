@@ -164,8 +164,8 @@ class Kanta(Generic[T]):
                 no background flush task is started, and transactions are
                 rejected. The file is not created if missing.
             log: Controls bootstrap and migration logging. ``True`` (default)
-                uses the ``kanta.changes`` logger for bootstrap records and the
-                ``kanta.migrations`` logger for migration output. ``False``
+                uses the ``kanta.bootstrap`` logger for bootstrap records and
+                the ``kanta.migration`` logger for migration output. ``False``
                 suppresses the default bootstrap and migration logs. A
                 :class:`~logging.Logger` instance writes default output to that
                 logger instead. Custom ``@kanta.logmigr`` callbacks run
@@ -314,9 +314,9 @@ class Kanta(Generic[T]):
                 :class:`~datetime.datetime` value sets ``m`` to that explicit
                 time.
             log: Controls transaction logging. ``True`` (default) uses the
-                ``kanta.changes`` logger. ``False`` suppresses the transaction
-                log. A :class:`~logging.Logger` instance writes output to that
-                logger instead.
+                ``kanta.transaction`` logger. ``False`` suppresses the
+                transaction log. A :class:`~logging.Logger` instance writes
+                output to that logger instead.
 
         Returns:
             A context manager yielding the live state object for mutation.
