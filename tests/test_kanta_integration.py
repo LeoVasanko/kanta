@@ -624,6 +624,52 @@ async def test_open_log_false_suppresses_migration_log(tmp_path, format_config, 
 
 
 @pytest.mark.asyncio
+async def test_open_log_true_logs_bootstrap(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+        await kanta.open()
+        await kanta.close()
+
+    info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_messages) >= 2
+    assert "Created" in info_messages[0]
+    assert "bootstrap" in info_messages[1]
+
+
+@pytest.mark.asyncio
+async def test_open_log_false_suppresses_bootstrap_log(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    with caplog.at_level(logging.INFO, logger="kanta.changes"):
+        await kanta.open(log=False)
+        await kanta.close()
+
+    info_messages = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert not info_messages
+
+
+@pytest.mark.asyncio
+async def test_open_log_custom_logger_logs_bootstrap(tmp_path, format_config, caplog):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    custom_logger = logging.getLogger("custom.bootstrap")
+    custom_logger.setLevel(logging.INFO)
+
+    with caplog.at_level(logging.INFO, logger="custom.bootstrap"):
+        await kanta.open(log=custom_logger)
+        await kanta.close()
+
+    info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_messages) >= 2
+    assert "Created" in info_messages[0]
+    assert "bootstrap" in info_messages[1]
+
+
+@pytest.mark.asyncio
 async def test_logmigr_callback_replaces_default_logging(
     tmp_path, format_config, caplog
 ):

@@ -177,6 +177,8 @@ async def test_logfmt_class_injection(tmp_path, format_config, caplog):
     @kanta.logfmt
     class UserLogFmt(LogFmt):
         def resolve(self, value: str, path: str) -> str | None:
+            if not isinstance(value, str):
+                return None
             return self.current_state.get("users", {}).get(value, {}).get("name")
 
     await kanta.open()

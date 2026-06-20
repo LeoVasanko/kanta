@@ -163,11 +163,13 @@ class Kanta(Generic[T]):
             readonly: If True, open the database read-only. No lock is acquired,
                 no background flush task is started, and transactions are
                 rejected. The file is not created if missing.
-            log: Controls migration logging. ``True`` (default) uses the
-                ``kanta.migrations`` logger. ``False`` suppresses the default
-                migration log. A :class:`~logging.Logger` instance writes
-                default migration output to that logger instead. Custom
-                ``@kanta.logmigr`` callbacks run regardless of this setting.
+            log: Controls bootstrap and migration logging. ``True`` (default)
+                uses the ``kanta.changes`` logger for bootstrap records and the
+                ``kanta.migrations`` logger for migration output. ``False``
+                suppresses the default bootstrap and migration logs. A
+                :class:`~logging.Logger` instance writes default output to that
+                logger instead. Custom ``@kanta.logmigr`` callbacks run
+                regardless of this setting.
 
         Calling ``open`` more than once on the same instance is not allowed.
 

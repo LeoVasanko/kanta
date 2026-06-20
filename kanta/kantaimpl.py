@@ -12,7 +12,7 @@ from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.logging import log_change, migration_logger
+from kanta.logging import _USER_PATH, changes_logger, log_change, migration_logger
 from kanta.migrations import MigrationResult, Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
@@ -277,13 +277,37 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
                 self.statedict = {}
                 current = struct_to_dict(self.data, serializer=self.serializer)
-                self.queue_change(
+                record = self.queue_change(
                     self.bootstrap_action,
                     current,
                     user=self.bootstrap_user,
                     mtime=self.bootstrap_mtime,
                     force=True,
                 )
+
+                if record is not None and log is not False:
+                    logger = log if isinstance(log, logging.Logger) else changes_logger
+                    logger.info("Created %s", self.filename.resolve())
+                    logfmt = self.callback_registry.build_logfmt(
+                        InjectionContext(
+                            previous_state={},
+                            current_state=current,
+                            kanta=self._kanta,
+                        )
+                    )
+                    formatted_user = self.bootstrap_user
+                    if formatted_user is not None and logfmt is not None:
+                        resolved = logfmt(formatted_user, _USER_PATH)
+                        if resolved is not None:
+                            formatted_user = resolved
+                    log_change(
+                        self.bootstrap_action,
+                        record.diff,
+                        formatted_user,
+                        previous={},
+                        logfmt=logfmt,
+                        logger=logger,
+                    )
             except Exception:
                 self.opened = False
                 self.file.close()
