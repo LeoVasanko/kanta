@@ -227,13 +227,15 @@ def resolve_user_key(value: str) -> str | None:
 #### Log Emitters
 
 - Every change-related message Kanta emits (transaction/bootstrap/migration
-  changes, `Created <file>`, migration summaries, aborted transactions) is
-  described by a `kanta.logging.LogEvent` and dispatched through
+  changes, file created/opened lines, migration summaries, aborted
+  transactions) is described by a `kanta.logging.LogEvent` and dispatched
+  through
   `kanta.logging.emit_event`.  Kanta's own output goes through the same
   mechanism: when no `logemit` callback handles an event,
   `kanta.logging.default_emit` renders it with the built-in formatting.
 - A `LogEvent` carries the event `kind` (`"change"`, `"created"`,
-  `"migrated"`, `"aborted"`), the preferred `logger` and `level`, the
+  `"opened"`, `"migrated"`, `"aborted"`), the preferred `logger` and `level`,
+  the
   `kanta` instance, and all relevant state: `action`, `user`, `extra`,
   `error` (for aborted transactions), `diff`, `previous`/`current` state
   dicts, the built `logfmt` chain, and version info for migration events.
@@ -245,8 +247,8 @@ def resolve_user_key(value: str) -> str | None:
   - `event.header` — a lazy property producing the default one-line header
     for any kind: `<action>[ <extra>][ by <user>]` for changes,
     `<action>[ <extra>][ by <user>] transaction aborted: <error>` for aborts,
-    and the
-    plain `Created`/`Migrated` summaries.  It is settable: assign
+    and the `🛢️ <file> created|opened|migrated ...` summaries.  It is
+    settable: assign
     `event.header = ...` and return truthy to restyle the header while
     keeping the default diff routing.
   - `event.diff_lines` — a lazy property producing the pretty diff body for

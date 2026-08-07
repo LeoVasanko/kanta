@@ -123,8 +123,8 @@ def test_default_emit_created_and_migrated(capsys):
         )
     )
     err = capsys.readouterr().err
-    assert "Created x.kantadb" in err
-    assert "Migrated x.kantadb v0 -> v1: migrate_v1 (rename)" in err
+    assert "🛢️ x.kantadb created" in err
+    assert "🛢️ x.kantadb migrated v0 -> v1: migrate_v1 (rename)" in err
 
 
 @pytest.mark.asyncio
@@ -295,7 +295,7 @@ async def test_aborted_transaction_includes_resolved_user(
 
 def test_event_header_covers_all_kinds():
     created = LogEvent(kind="created", logger=transaction_logger, filename="x.db")
-    assert created.header == "Created x.db"
+    assert created.header == "🛢️ x.db created"
 
     migrated = LogEvent(
         kind="migrated",
@@ -305,7 +305,7 @@ def test_event_header_covers_all_kinds():
         to_version=1,
         migrations=["migrate_v1 (rename)"],
     )
-    assert migrated.header == "Migrated x.db v0 -> v1: migrate_v1 (rename)"
+    assert migrated.header == "🛢️ x.db migrated v0 -> v1: migrate_v1 (rename)"
 
     aborted = LogEvent(
         kind="aborted",

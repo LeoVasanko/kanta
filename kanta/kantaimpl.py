@@ -242,9 +242,18 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             )
             self.version = rr.version
             self.mtime = rr.m
-            if log is not False:
+            if log is not False and not migrations_ran:
                 logger = log if isinstance(log, logging.Logger) else bootstrap_logger
-                logger.debug("Using %s", self.filename.resolve())
+                emit_event(
+                    LogEvent(
+                        kind="opened",
+                        logger=logger,
+                        level=logging.DEBUG,
+                        kanta=self._kanta,
+                        filename=str(self.filename.resolve()),
+                    ),
+                    self.callback_registry.logemit_handlers,
+                )
             normalized = struct_to_dict(self.data, serializer=self.serializer)
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
@@ -257,6 +266,11 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     f"migrate:v{self.version}" if migrations_ran else "migrate:msgspec"
                 )
                 record = self.queue_change(action, normalized, mtime=False)
+                # The migration summary introduces the diff, so log it first.
+                if migrations_ran and migration_result is not None:
+                    await self._handle_migration_log(
+                        migration_result, previous_version, log
+                    )
                 if (
                     record is not None
                     and log is not False
@@ -276,10 +290,6 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                             previous=previous,
                         ),
                         self.callback_registry.logemit_handlers,
-                    )
-                if migrations_ran and migration_result is not None:
-                    await self._handle_migration_log(
-                        migration_result, previous_version, log
                     )
                 if migrations_ran or record is not None:
                     self.snapshot.request_force()

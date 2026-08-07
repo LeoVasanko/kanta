@@ -634,7 +634,7 @@ async def test_open_log_true_logs_bootstrap(tmp_path, format_config, caplog):
 
     info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert len(info_messages) >= 2
-    assert "Created" in info_messages[0]
+    assert "created" in info_messages[0]
     assert "bootstrap" in info_messages[1]
 
 
@@ -665,7 +665,7 @@ async def test_open_log_custom_logger_logs_bootstrap(tmp_path, format_config, ca
 
     info_messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
     assert len(info_messages) >= 2
-    assert "Created" in info_messages[0]
+    assert "created" in info_messages[0]
     assert "bootstrap" in info_messages[1]
 
 
@@ -685,7 +685,7 @@ async def test_open_existing_database_logs_using_on_debug(
         await kanta2.close()
 
     debug_messages = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
-    assert any("Using" in m and str(path.resolve()) in m for m in debug_messages)
+    assert any("opened" in m and str(path.resolve()) in m for m in debug_messages)
 
 
 @pytest.mark.asyncio

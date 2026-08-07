@@ -40,10 +40,11 @@ class LogEvent(msgspec.Struct, kw_only=True):
     """All state describing one loggable event, passed to logemit callbacks.
 
     ``kind`` is ``"change"`` (transaction, bootstrap, or migration diff),
-    ``"created"`` (database file created), ``"migrated"`` (migration
-    summary), or ``"aborted"`` (transaction rolled back).  ``logger`` and
-    ``level`` are Kanta's preferred destination; a callback may use them,
-    log elsewhere, or not log at all.
+    ``"created"`` (database file created), ``"opened"`` (database file
+    opened), ``"migrated"`` (migration summary), or ``"aborted"``
+    (transaction rolled back).  ``logger`` and ``level`` are Kanta's
+    preferred destination; a callback may use them, log elsewhere, or not
+    log at all.
 
     The event is mutable: a callback may modify it before returning a truthy
     value to pass it on, affecting later callbacks and the built-in fallback.
@@ -75,8 +76,8 @@ class LogEvent(msgspec.Struct, kw_only=True):
 
         Covers every event kind: ``"<action>[ <extra>][ by <user>]"`` for
         changes, ``"<action>[ <extra>][ by <user>] transaction aborted:
-        <error>"`` for aborts, and the plain ``Created``/``Migrated``
-        summaries.
+        <error>"`` for aborts, and the ``🛢️ <filename> <verb>`` file
+        summaries (created / opened / migrated).
         """
         if self._header is None:
             self._header = self._build_header()
@@ -93,11 +94,13 @@ class LogEvent(msgspec.Struct, kw_only=True):
 
     def _build_header(self) -> str:
         if self.kind == "created":
-            return f"Created {self.filename}"
+            return f"🛢️ {self.filename} created"
+        if self.kind == "opened":
+            return f"🛢️ {self.filename} opened"
         if self.kind == "migrated":
             migrations = ", ".join(self.migrations)
             return (
-                f"Migrated {self.filename} "
+                f"🛢️ {self.filename} migrated "
                 f"v{self.from_version} -> v{self.to_version}: {migrations}"
             )
         if self.kind == "change":

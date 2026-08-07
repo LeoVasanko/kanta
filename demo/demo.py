@@ -57,7 +57,7 @@ def resolve_user(value: str, path: str, previous: DictPre) -> str | None:
 async def main() -> None:
     filename.unlink(missing_ok=True)
 
-    print("# Database creation with v0 schema and basic ops, pretty logs")
+    print("Database creation with v0 schema and basic transactions:\n")
     # Open and close automatically; you can also `await kanta.open()` instead
     async with kanta_v0 as kanta:
         with kanta.transaction(action="create", user="userid001") as data:
@@ -73,9 +73,7 @@ async def main() -> None:
         ) as data:
             data.counter = 2
 
-    print(
-        "\n# A later version of our application with new data model, migrations and logfmt"
-    )
+    print("\nA new data model, migrations and logfmt pretty names:\n")
     async with kanta_v1 as kanta:
         with kanta.transaction(
             action="update", user="userid002", extra=filename.name
@@ -87,7 +85,7 @@ async def main() -> None:
                 data.total = 99
                 raise ValueError("simulated failure")
         except ValueError:
-            print(f"# Reading does not need transaction: {data.total=}", flush=True)
+            print(f"\nReset rolled back: {data.total=} (we can always read data without tx)\n")
 
         with kanta.transaction(action="delete", user="userid002") as data:
             del data.users["userid001"]
