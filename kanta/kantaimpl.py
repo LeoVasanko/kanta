@@ -124,21 +124,6 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         if not changed:
             return
 
-        for info in changed:
-            if info.diff:
-                emit_event(
-                    LogEvent(
-                        kind="change",
-                        logger=migration_log,
-                        level=logging.DEBUG,
-                        kanta=self._kanta,
-                        action=info.name,
-                        diff=info.diff,
-                        previous=info.before,
-                    ),
-                    self.callback_registry.logemit_handlers,
-                )
-
         descriptions = [f"{m.name} ({m.description})" for m in changed]
         emit_event(
             LogEvent(
@@ -237,10 +222,6 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 rr.version = migration_result.version
 
             migrations_ran = rr.version != previous_version
-            migration_state_changed = (
-                state_before_migrations is not None
-                and state_before_migrations != rr.state
-            )
 
             self.snapshot.ts = (
                 datetime.fromtimestamp(rr.last_snapshot_mtime, UTC)
@@ -268,16 +249,39 @@ class KantaImpl(PersistenceMixin, Generic[T]):
             if self.readonly:
                 self.statedict = copy.deepcopy(normalized)
             else:
-                if migrations_ran and migration_state_changed:
-                    self.queue_change(
-                        f"migrate:v{self.version}",
-                        rr.state,
-                        mtime=False,
-                    )
-                msgspec_record = self.queue_change(
-                    "migrate:msgspec", normalized, mtime=False
+                # One record per open: migration changes and normalization are
+                # grouped into migrate:vN, or migrate:msgspec when only the
+                # serialization drifted.
+                previous = self.statedict
+                action = (
+                    f"migrate:v{self.version}" if migrations_ran else "migrate:msgspec"
                 )
-                if migrations_ran or msgspec_record is not None:
+                record = self.queue_change(action, normalized, mtime=False)
+                if (
+                    record is not None
+                    and log is not False
+                    and not (migrations_ran and self.callback_registry.has("logmigr"))
+                ):
+                    logger = (
+                        log if isinstance(log, logging.Logger) else migration_logger
+                    )
+                    emit_event(
+                        LogEvent(
+                            kind="change",
+                            logger=logger,
+                            level=logging.DEBUG,
+                            kanta=self._kanta,
+                            action=action,
+                            diff=record.diff,
+                            previous=previous,
+                        ),
+                        self.callback_registry.logemit_handlers,
+                    )
+                if migrations_ran and migration_result is not None:
+                    await self._handle_migration_log(
+                        migration_result, previous_version, log
+                    )
+                if migrations_ran or record is not None:
                     self.snapshot.request_force()
                     await self.flush()
                     self.snapshot.maybe_write(
@@ -286,11 +290,6 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                         self.statedict,
                         m=self.mtime,
                         now=self.now,
-                    )
-
-                if migrations_ran and migration_result is not None:
-                    await self._handle_migration_log(
-                        migration_result, previous_version, log
                     )
         elif self.readonly:
             self.opened = False

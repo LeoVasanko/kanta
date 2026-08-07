@@ -480,6 +480,7 @@ def configure_logging(
     migration: bool = True,
     transaction: bool = True,
     diff: bool = True,
+    debug: bool = False,
 ) -> None:
     """Configure Kanta's default logging output.
 
@@ -497,6 +498,9 @@ def configure_logging(
             only transaction headers are printed and diff formatting is
             skipped.  Per transaction this is controlled by the ``logdiff``
             argument of :meth:`Kanta.transaction`.
+        debug: Whether to set the ``kanta`` logger level to ``DEBUG`` instead
+            of ``INFO``.  This reveals debug-level output such as migration
+            diffs, which are hidden by default.
 
     This helper is not called automatically; applications that want Kanta's
     default output can call it, but most applications will configure logging
@@ -521,4 +525,4 @@ def configure_logging(
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(message)s"))
         target.addHandler(handler)
-    target.setLevel(logging.INFO)
+    target.setLevel(logging.DEBUG if debug else logging.INFO)

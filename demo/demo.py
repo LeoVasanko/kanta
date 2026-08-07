@@ -106,5 +106,5 @@ def fake_clock() -> datetime:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging(debug=True)
     asyncio.run(main())

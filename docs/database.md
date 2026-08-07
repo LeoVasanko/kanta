@@ -76,8 +76,9 @@ history.
 - In-memory data is defined by an application `msgspec.Struct` type.
 - Kanta round-trips through plain builtins for persistence and diffing.
 - Dict keys are serialized as strings (`str_keys=True`) for stable JSON form.
-- Normalization changes introduced by struct decode/encode are logged as
-  `migrate:msgspec` when they produce a diff.
+- Normalization changes introduced by struct decode/encode are logged together
+  with migrations as `migrate:vN`, or as `migrate:msgspec` when no migration
+  ran but normalization still produces a diff.
 
 ## Transaction Semantics
 
