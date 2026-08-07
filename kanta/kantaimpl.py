@@ -12,7 +12,13 @@ from typing import Any, Generic, TypeVar
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.logging import _USER_PATH, bootstrap_logger, log_change, migration_logger
+from kanta.logging import (
+    _USER_PATH,
+    LogEvent,
+    bootstrap_logger,
+    emit_event,
+    migration_logger,
+)
 from kanta.migrations import MigrationResult, Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
@@ -21,6 +27,11 @@ from kanta.serialization.base import replay
 _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def _log_callback_error(callback_error, callback):
+    """Report a failing logging callback and continue with the next one."""
+    _logger.exception("Log callback %r failed: %s", callback, callback_error)
 
 
 class KantaImpl(PersistenceMixin, Generic[T]):
@@ -80,6 +91,10 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         """Register one migration logging callback."""
         self.callback_registry.register("logmigr", callback)
 
+    def add_logemit(self, callback) -> None:
+        """Register one log emitter callback."""
+        self.callback_registry.register("logemit", callback)
+
     async def _handle_migration_log(
         self,
         migration_result: MigrationResult,
@@ -96,6 +111,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     kanta=self._kanta,
                     migration_result=migration_result,
                 ),
+                on_error=_log_callback_error,
             )
             return
 
@@ -110,21 +126,31 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         for info in changed:
             if info.diff:
-                log_change(
-                    info.name,
-                    info.diff,
-                    previous=info.before,
-                    logger=migration_log,
-                    level=logging.DEBUG,
+                emit_event(
+                    LogEvent(
+                        kind="change",
+                        logger=migration_log,
+                        level=logging.DEBUG,
+                        kanta=self._kanta,
+                        action=info.name,
+                        diff=info.diff,
+                        previous=info.before,
+                    ),
+                    self.callback_registry.logemit_handlers,
                 )
 
         descriptions = [f"{m.name} ({m.description})" for m in changed]
-        migration_log.info(
-            "Migrated %s v%s -> v%s: %s",
-            self.filename,
-            previous_version,
-            migration_result.version,
-            ", ".join(descriptions),
+        emit_event(
+            LogEvent(
+                kind="migrated",
+                logger=migration_log,
+                kanta=self._kanta,
+                filename=str(self.filename),
+                from_version=previous_version,
+                to_version=migration_result.version,
+                migrations=descriptions,
+            ),
+            self.callback_registry.logemit_handlers,
         )
 
     async def open(
@@ -255,7 +281,11 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     self.snapshot.request_force()
                     await self.flush()
                     self.snapshot.maybe_write(
-                        self.file, self.version, self.statedict, m=self.mtime
+                        self.file,
+                        self.version,
+                        self.statedict,
+                        m=self.mtime,
+                        now=self.now,
                     )
 
                 if migrations_ran and migration_result is not None:
@@ -289,8 +319,18 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 )
 
                 if record is not None and log is not False:
-                    logger = log if isinstance(log, logging.Logger) else bootstrap_logger
-                    logger.info("Created %s", self.filename.resolve())
+                    logger = (
+                        log if isinstance(log, logging.Logger) else bootstrap_logger
+                    )
+                    emit_event(
+                        LogEvent(
+                            kind="created",
+                            logger=logger,
+                            kanta=self._kanta,
+                            filename=str(self.filename.resolve()),
+                        ),
+                        self.callback_registry.logemit_handlers,
+                    )
                     logfmt = self.callback_registry.build_logfmt(
                         InjectionContext(
                             previous_state={},
@@ -303,14 +343,19 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                         resolved = logfmt(formatted_user, _USER_PATH)
                         if resolved is not None:
                             formatted_user = resolved
-                    log_change(
-                        self.bootstrap_action,
-                        record.diff,
-                        formatted_user,
-                        previous={},
-                        logfmt=logfmt,
-                        logger=logger,
-                        level=logging.INFO,
+                    emit_event(
+                        LogEvent(
+                            kind="change",
+                            logger=logger,
+                            kanta=self._kanta,
+                            action=self.bootstrap_action,
+                            user=formatted_user,
+                            diff=record.diff,
+                            previous={},
+                            current=current,
+                            logfmt=logfmt,
+                        ),
+                        self.callback_registry.logemit_handlers,
                     )
             except Exception:
                 self.opened = False

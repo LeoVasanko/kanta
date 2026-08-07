@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from kanta.kantaimpl import KantaImpl
 from kanta.serialization import JsonSerializer, Serializer
@@ -130,7 +130,10 @@ class Kanta(Generic[T]):
         """User-writable context namespace.
 
         Migration functions receive the ``Kanta`` instance and can read or
-        mutate ``kanta.ctx`` during migrations.
+        mutate ``kanta.ctx`` during migrations.  Applications can also store
+        arbitrary data here (e.g. a connection id); since
+        :class:`kanta.logging.LogEvent` carries the Kanta instance, logemit
+        callbacks can read it as ``event.kanta.ctx``.
         """
         return self._impl.ctx
 
@@ -253,6 +256,27 @@ class Kanta(Generic[T]):
             return _register
         return _register(fn)
 
+    def clock(self, fn=None):
+        """Register a clock callback replacing the default UTC clock.
+
+        Can be used as ``@kanta.clock``.  The callback takes no arguments and
+        must return a :class:`~datetime.datetime`; its value is used for all
+        record timestamps (``ts``, and ``m`` when ``mtime`` is ``True``) and
+        snapshot timestamps.  The clock is only read when a timestamp is
+        actually produced, so read-count-dependent clocks (e.g. advancing on
+        every read) stay deterministic.  Register before :meth:`open` so that
+        bootstrap and migration records use the custom clock as well.  This is
+        mainly useful for tests and reproducible demos.
+        """
+
+        def _register(callback):
+            self._impl.add_clock(callback)
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
     def logmigr(self, fn=None):
         """Register a migration logging callback.
 
@@ -292,13 +316,39 @@ class Kanta(Generic[T]):
             return _register
         return _register(fn)
 
+    def logemit(self, fn=None):
+        """Register a log emitter callback.
+
+        Can be used as ``@kanta.logemit``.  The callback receives a single
+        :class:`kanta.logging.LogEvent` describing the event, including the
+        preferred logger and level, and decides what (if anything) is logged
+        and where.
+
+        A falsy return value marks the event as handled and stops the chain.
+        A truthy return value passes the event — possibly modified — to the
+        next registered callback; when all callbacks pass, Kanta renders the
+        event with its built-in formatting
+        (:func:`kanta.logging.default_emit`), which a callback may also call
+        itself to delegate events it does not care about.
+        """
+
+        def _register(callback):
+            self._impl.add_logemit(callback)
+            return callback
+
+        if fn is None:
+            return _register
+        return _register(fn)
+
     def transaction(
         self,
         action: str,
         *,
         user: str | None = None,
+        extra: Any = None,
         mtime: bool | datetime = True,
         log: bool | logging.Logger = True,
+        logdiff: bool = True,
     ):
         """Create a transactional mutation context manager.
 
@@ -307,6 +357,11 @@ class Kanta(Generic[T]):
             user: Optional user identifier stored in metadata and rendered in
                 the log header.  Register a ``@kanta.logfmt`` callback to format
                 the user value; the path ``"$user"`` is passed for this case.
+            extra: Optional display-only value shown after the action in the
+                log header.  Anything other than ``None`` is printed
+                str-converted (colored by Kanta), unless a custom
+                ``@kanta.logemit`` handler does something else with it.  It is
+                never persisted in the change record.
             mtime: Controls the modification time ``m``. ``True`` (default)
                 sets ``m`` to the current UTC time. ``False`` omits ``m`` so the
                 previous modification time remains in effect; this is used for
@@ -317,6 +372,11 @@ class Kanta(Generic[T]):
                 ``kanta.transaction`` logger. ``False`` suppresses the
                 transaction log. A :class:`~logging.Logger` instance writes
                 output to that logger instead.
+            logdiff: Whether to build and print the diff body. ``False``
+                skips diff formatting entirely and logs only the header,
+                which is useful for large or noisy changesets. Diff output
+                can also be disabled globally with
+                ``configure_logging(diff=False)``.
 
         Returns:
             A context manager yielding the live state object for mutation.
@@ -330,6 +390,8 @@ class Kanta(Generic[T]):
             self._impl,
             action,
             user=user,
+            extra=extra,
             mtime=mtime,
             log=log,
+            logdiff=logdiff,
         )

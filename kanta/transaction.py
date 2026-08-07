@@ -5,14 +5,34 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
 
 from kanta.diff import compute_diff
 from kanta.exceptions import DataIntegrityError
 from kanta.callbacks import InjectionContext
-from kanta.logging import _USER_PATH, log_change, transaction_logger
+from kanta.logging import _USER_PATH, LogEvent, emit_event, transaction_logger
 from kanta.serialization import restore_data_in_place, struct_to_dict
 
 _logger = logging.getLogger(__name__)
+
+
+def _build_logfmt(impl, previous: dict, current: dict):
+    """Build the logfmt chain for a state transition."""
+    return impl.callback_registry.build_logfmt(
+        InjectionContext(
+            previous_state=previous,
+            current_state=current,
+            kanta=impl._kanta,
+        )
+    )
+
+
+def _resolve_user(logfmt, user: str | None) -> str | None:
+    """Resolve *user* for display via the logfmt chain (raw as fallback)."""
+    if user is None:
+        return None
+    resolved = logfmt(user, _USER_PATH)
+    return resolved if resolved is not None else user
 
 
 @contextmanager
@@ -21,8 +41,10 @@ def transaction(
     action: str,
     *,
     user: str | None = None,
+    extra: Any = None,
     mtime: bool | datetime = True,
     log: bool | logging.Logger = True,
+    logdiff: bool = True,
 ):
     """Wrap writes in a transaction and yield the live db object."""
     if impl.readonly:
@@ -69,30 +91,45 @@ def transaction(
             previous = impl.statedict
             record = impl.queue_change(action, new_dict, user=user, mtime=mtime)
             if record is not None:
-                logfmt = impl.callback_registry.build_logfmt(
-                    InjectionContext(
-                        previous_state=previous,
-                        current_state=new_dict,
-                        kanta=impl._kanta,
-                    )
-                )
-                formatted_user = user
-                if user is not None and logfmt is not None:
-                    resolved = logfmt(user, _USER_PATH)
-                    if resolved is not None:
-                        formatted_user = resolved
                 if log is not False:
-                    logger = log if isinstance(log, logging.Logger) else transaction_logger
-                    log_change(
-                        action,
-                        record.diff,
-                        formatted_user,
-                        previous,
-                        logfmt,
-                        logger=logger,
+                    logfmt = _build_logfmt(impl, previous, new_dict)
+                    logger = (
+                        log if isinstance(log, logging.Logger) else transaction_logger
                     )
-    except Exception:
-        _logger.warning("Transaction '%s' failed, rolling back changes", action)
+                    emit_event(
+                        LogEvent(
+                            kind="change",
+                            logger=logger,
+                            kanta=impl._kanta,
+                            action=action,
+                            user=_resolve_user(logfmt, user),
+                            extra=extra,
+                            diff=record.diff,
+                            previous=previous,
+                            current=new_dict,
+                            logfmt=logfmt,
+                            show_diff=logdiff,
+                        ),
+                        impl.callback_registry.logemit_handlers,
+                    )
+    except Exception as exc:
+        resolved_user = None
+        if user is not None:
+            logfmt = _build_logfmt(impl, impl.statedict, impl.statedict)
+            resolved_user = _resolve_user(logfmt, user)
+        emit_event(
+            LogEvent(
+                kind="aborted",
+                logger=transaction_logger,
+                level=logging.WARNING,
+                kanta=impl._kanta,
+                action=action,
+                user=resolved_user,
+                extra=extra,
+                error=exc,
+            ),
+            impl.callback_registry.logemit_handlers,
+        )
         if impl.transaction_snapshot is not None:
             impl.data = restore_data_in_place(
                 impl.data,

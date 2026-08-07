@@ -1,19 +1,27 @@
 """Database change logging with pretty-printed diffs.
 
-Provides loggers for JSONL database changes, bootstrap events, and
-migrations.  Diff output is formatted in a human-readable path notation
-style with color coding.
+All change-related output is described by a :class:`LogEvent` and dispatched
+through :func:`emit_event`, which runs any registered ``logemit`` callbacks
+and falls back to :func:`default_emit` for the built-in formatting.  Diff
+output is formatted in a human-readable path notation style with color
+coding; see :mod:`kanta.tty` for the color palette and line builder.
 """
 
 import logging
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
+
+import msgspec
+
+from kanta.tty import Line, displaywidth
 
 transaction_logger = logging.getLogger("kanta.transaction")
 bootstrap_logger = logging.getLogger("kanta.bootstrap")
 migration_logger = logging.getLogger("kanta.migration")
+
+_logger = logging.getLogger(__name__)
 
 # Pattern to match control characters and bidirectional overrides
 _UNSAFE_CHARS = re.compile(
@@ -24,18 +32,149 @@ _UNSAFE_CHARS = re.compile(
     r"]"
 )
 
-# ANSI color codes
-_RESET = "\033[0m"
-_SEP = "\033[38;5;242m"  # Dark grey for separators
-_PATH_PREFIX = "\033[38;5;242m"  # Dark grey for path prefix
-_PATH_FINAL = "\033[38;5;250m"  # Default for final element
-_DELETE = "\033[1;31m"  # Red for deletions
-_ADD = "\033[0;32m"  # Green for additions
-_ACTION = "\033[1;34m"  # Bold blue for action name
-_USER = "\033[0;34m"  # Blue for user display
-
 # Metadata path used when formatting the transaction actor.
 _USER_PATH = "$user"
+
+
+class LogEvent(msgspec.Struct, kw_only=True):
+    """All state describing one loggable event, passed to logemit callbacks.
+
+    ``kind`` is ``"change"`` (transaction, bootstrap, or migration diff),
+    ``"created"`` (database file created), ``"migrated"`` (migration
+    summary), or ``"aborted"`` (transaction rolled back).  ``logger`` and
+    ``level`` are Kanta's preferred destination; a callback may use them,
+    log elsewhere, or not log at all.
+
+    The event is mutable: a callback may modify it before returning a truthy
+    value to pass it on, affecting later callbacks and the built-in fallback.
+    """
+
+    kind: str
+    logger: logging.Logger
+    level: int = logging.INFO
+    kanta: Any = None
+    action: str | None = None
+    user: str | None = None
+    extra: Any = None
+    error: BaseException | None = None
+    diff: dict = msgspec.field(default_factory=dict)
+    previous: dict | None = None
+    current: dict | None = None
+    logfmt: Callable[[Any, str], str | None] | None = None
+    show_diff: bool = True
+    filename: str | None = None
+    from_version: int | None = None
+    to_version: int | None = None
+    migrations: list[str] = msgspec.field(default_factory=list)
+    _header: str | None = None
+    _diff_lines: list[str] | None = None
+
+    @property
+    def header(self) -> str:
+        """The default one-line header for this event, built on first access.
+
+        Covers every event kind: ``"<action>[ <extra>][ by <user>]"`` for
+        changes, ``"<action>[ <extra>][ by <user>] transaction aborted:
+        <error>"`` for aborts, and the plain ``Created``/``Migrated``
+        summaries.
+        """
+        if self._header is None:
+            self._header = self._build_header()
+        return self._header
+
+    @header.setter
+    def header(self, value: str) -> None:
+        """Override the header, keeping the default diff routing.
+
+        A logemit callback can restyle the header and return a truthy value:
+        :func:`default_emit` then logs this header instead of building one.
+        """
+        self._header = value
+
+    def _build_header(self) -> str:
+        if self.kind == "created":
+            return f"Created {self.filename}"
+        if self.kind == "migrated":
+            migrations = ", ".join(self.migrations)
+            return (
+                f"Migrated {self.filename} "
+                f"v{self.from_version} -> v{self.to_version}: {migrations}"
+            )
+        if self.kind == "change":
+            return format_action_header(self.action or "", self.user, self.extra)
+        line = Line().action(self.action or "")
+        if self.extra:
+            line(" ").target(self.extra)
+        if self.user:
+            line(" by ").user(self.user)
+        line(f" transaction aborted: {self.error}")
+        return str(line)
+
+    @property
+    def diff_lines(self) -> list[str]:
+        """Pretty-printed diff lines, built on first access and cached."""
+        if self._diff_lines is None:
+            self._diff_lines = format_diff(self.diff, self.previous, self.logfmt)
+        return self._diff_lines
+
+
+def emit_event(
+    ev: LogEvent,
+    handlers: Iterable[Callable[[LogEvent], Any]] = (),
+) -> None:
+    """Dispatch *ev* through registered logemit handlers.
+
+    Each handler receives the event and may log it (or not) as it sees fit.
+    A falsy return value stops the chain: the event is considered handled.
+    A truthy return value passes the event — possibly modified — to the next
+    handler.  When all handlers pass, :func:`default_emit` renders the event
+    with the built-in formatting.
+
+    Logging must never break functionality: a crashing handler is reported
+    and the chain falls back to the built-in formatting, and a failure in
+    the built-in formatting itself is reported and swallowed.
+    """
+    try:
+        for handler in handlers:
+            try:
+                proceed = handler(ev)
+            except Exception:
+                _logger.exception("logemit callback failed, using default formatting")
+                break
+            if not proceed:
+                return
+        default_emit(ev)
+    except Exception:
+        _logger.exception("failed to emit %s log event", ev.kind)
+
+
+def default_emit(ev: LogEvent) -> None:
+    """Emit *ev* with Kanta's built-in formatting.
+
+    Logs :attr:`LogEvent.header`; for change events the
+    :attr:`LogEvent.diff_lines` body follows on the ``<logger>.diff`` child
+    logger so it can be silenced or routed separately from the headers.
+    This is what runs when no logemit callback handles the event; custom
+    callbacks may call it to delegate events they do not care about.
+    """
+    if ev.kind != "change":
+        ev.logger.log(ev.level, ev.header)
+        return
+
+    diff_logger = logging.getLogger(f"{ev.logger.name}.diff")
+    lines = ev.diff_lines if ev.show_diff and diff_logger.isEnabledFor(ev.level) else []
+
+    if not lines:
+        ev.logger.log(ev.level, ev.header)
+        return
+
+    if len(lines) == 1:
+        diff_logger.log(ev.level, f"{ev.header}{lines[0]}")
+        return
+
+    ev.logger.log(ev.level, ev.header)
+    for line in lines:
+        diff_logger.log(ev.level, line)
 
 
 def _join_path(path: str, key: str) -> str:
@@ -116,17 +255,22 @@ def _format_path_components(
 
 
 def _format_path(
-    path: list[str], logfmt: Callable[[Any, str], str | None] | None
+    path: list[str],
+    logfmt: Callable[[Any, str], str | None] | None,
+    final_color: str = "path_final",
 ) -> str:
-    """Format a path as dot notation with prefix in dark grey, final in default."""
+    """Format a path as dot notation with prefix in dark grey, final colored.
+
+    *final_color* names a color in the :data:`kanta.tty.colors` palette.
+    """
     components = _format_path_components(path, logfmt)
     if not components:
         return ""
-    if len(components) == 1:
-        return f"{_PATH_FINAL}{components[0]}{_RESET}"
-    prefix = ".".join(components[:-1])
-    final = components[-1]
-    return f"{_PATH_PREFIX}{prefix}.{_RESET}{_PATH_FINAL}{final}{_RESET}"
+    line = Line()
+    if len(components) > 1:
+        line.path_prefix(".".join(components[:-1]) + ".")
+    getattr(line, final_color)(components[-1])
+    return str(line)
 
 
 def _get_nested(data: dict | None, path: list[str]) -> Any:
@@ -202,19 +346,18 @@ def _format_change_lines(
     logfmt: Callable[[Any, str], str | None] | None = None,
 ) -> list[str]:
     """Format a single change as one or more lines."""
-    path_str = _format_path(path, logfmt=logfmt)
-
     if change_type == "delete":
         components = _format_path_components(path, logfmt)
-        if len(components) == 1:
-            return [f"  {_DELETE}{components[0]} ✗{_RESET}"]
-        prefix = ".".join(components[:-1])
-        final = components[-1]
-        return [f"  {_PATH_PREFIX}{prefix}.{_RESET}{_DELETE}{final} ✗{_RESET}"]
+        line = Line()("  ")
+        if len(components) > 1:
+            line.path_prefix(".".join(components[:-1]) + ".")
+        line.delete(components[-1], " ✗")
+        return [str(line)]
 
     if change_type == "add":
+        path_str = _format_path(path, logfmt, final_color="add")
         if isinstance(value, dict) and value:
-            lines = [f"  {path_str} {_SEP}={_RESET}"]
+            lines = [str(Line()("  ", path_str, " ").sep("="))]
             formatted_items = []
             base_path = ".".join(path)
             for k, v in value.items():
@@ -222,17 +365,22 @@ def _format_change_lines(
                 key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
                 v_str = _format_value(v, key_path, max_len=30, logfmt=logfmt)
                 formatted_items.append((key_display, v_str))
-            max_key_len = max(len(k) for k, _ in formatted_items)
-            field_width = max(max_key_len, 12)
-            for k_display, v_str in formatted_items:
-                padding = " " * (field_width - len(k_display))
-                lines.append(f"    {k_display}{_SEP}:{_RESET}{padding} {v_str}")
-            return lines
+            field_width = max(displaywidth(k) for k, _ in formatted_items)
+            field_width = max(field_width, 12)
+            return lines + [
+                str(
+                    Line()("    ", k).sep(":")(
+                        " " * (field_width - displaywidth(k)), " ", v
+                    )
+                )
+                for k, v in formatted_items
+            ]
         value_str = _format_value(value, ".".join(path), logfmt=logfmt)
-        return [f"  {path_str} {_SEP}={_RESET} {value_str}"]
+        return [str(Line()("  ", path_str, " ").sep("=")(" ", value_str))]
 
     value_str = _format_value(value, ".".join(path), logfmt=logfmt)
-    return [f"  {path_str} {_SEP}={_RESET} {value_str}"]
+    path_str = _format_path(path, logfmt=logfmt)
+    return [str(Line()("  ", path_str, " ").sep("=")(" ", value_str))]
 
 
 def format_diff(
@@ -262,13 +410,18 @@ def format_diff(
     return lines
 
 
-def format_action_header(action: str, user: str | None = None) -> str:
-    """Format the action header line."""
-    action_str = f"{_ACTION}{action}{_RESET}"
-    if user:
-        user_str = f"{_USER}{user}{_RESET}"
-        return f"{action_str} by {user_str}"
-    return action_str
+def format_action_header(
+    action: str,
+    user: str | None = None,
+    extra: Any = None,
+) -> str:
+    """Format the default action header line."""
+    line = Line().action(action)
+    if extra is not None and (extra := f"{extra}"):
+        line(" ").target(extra)
+    if user is not None and (user := f"{user}"):
+        line(" by ").user(user)
+    return str(line)
 
 
 def log_change(
@@ -276,35 +429,48 @@ def log_change(
     diff: dict,
     user: str | None = None,
     previous: dict | None = None,
+    extra: Any = None,
     logfmt: Callable[[Any, str], str | None] | None = None,
     *,
     logger: logging.Logger = transaction_logger,
     level: int = logging.INFO,
+    log_diff: bool = True,
 ) -> None:
-    """Log a database change with pretty-printed diff.
+    """Log a database change with the built-in formatting.
+
+    Compatibility wrapper around :func:`emit_event` with no handlers; Kanta
+    itself builds a :class:`LogEvent` and dispatches it with the registered
+    logemit callbacks.
 
     Args:
         action: The action name (e.g., "login", "admin:delete_user").
         diff: The JSON diff dict.
         user: Optional already-formatted user name to show in the header.
         previous: The previous state dict (for determining add vs update).
+        extra: Optional display-only value shown after the action in the
+            header.  Anything other than ``None`` is printed str-converted
+            (colored by Kanta), unless a custom logemit handler does
+            something else with it.
         logfmt: Optional formatter callable ``(value, path) -> str | None``.
         logger: Logger to write to. Defaults to the ``kanta.transaction`` logger.
         level: Log level to use. Defaults to ``logging.INFO``.
+        log_diff: Whether to build and emit the diff lines.  ``False`` skips
+            diff formatting entirely and only the header is logged.
     """
-    header = format_action_header(action, user)
-    diff_lines = format_diff(diff, previous, logfmt)
-
-    if not diff_lines:
-        logger.log(level, header)
-        return
-
-    if len(diff_lines) == 1:
-        logger.log(level, f"{header}{diff_lines[0]}")
-    else:
-        logger.log(level, header)
-        for line in diff_lines:
-            logger.log(level, line)
+    emit_event(
+        LogEvent(
+            kind="change",
+            logger=logger,
+            level=level,
+            action=action,
+            user=user,
+            extra=extra,
+            diff=diff,
+            previous=previous,
+            logfmt=logfmt,
+            show_diff=log_diff,
+        )
+    )
 
 
 def configure_logging(
@@ -313,6 +479,7 @@ def configure_logging(
     bootstrap: bool = True,
     migration: bool = True,
     transaction: bool = True,
+    diff: bool = True,
 ) -> None:
     """Configure Kanta's default logging output.
 
@@ -326,11 +493,17 @@ def configure_logging(
         bootstrap: Whether bootstrap logs are enabled.
         migration: Whether migration logs are enabled.
         transaction: Whether transaction logs are enabled.
+        diff: Whether transaction diff lines are enabled.  When ``False``,
+            only transaction headers are printed and diff formatting is
+            skipped.  Per transaction this is controlled by the ``logdiff``
+            argument of :meth:`Kanta.transaction`.
 
     This helper is not called automatically; applications that want Kanta's
     default output can call it, but most applications will configure logging
     themselves.
     """
+    logging.getLogger("kanta.transaction.diff").disabled = not diff
+
     for name, enabled in (
         ("kanta.bootstrap", bootstrap),
         ("kanta.migration", migration),

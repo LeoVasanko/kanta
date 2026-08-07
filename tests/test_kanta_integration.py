@@ -739,6 +739,26 @@ async def test_transaction_log_false_suppresses_log(tmp_path, format_config, cap
 
 
 @pytest.mark.asyncio
+async def test_transaction_logdiff_false_logs_header_only(
+    tmp_path, format_config, caplog
+):
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+    await kanta.open()
+
+    with caplog.at_level(logging.INFO, logger="kanta.transaction"):
+        with kanta.transaction(action="inc", logdiff=False) as data:
+            data.counter = 1
+
+    await kanta.close()
+
+    messages = [r.message for r in caplog.records if r.levelno == logging.INFO]
+    assert len(messages) == 1
+    assert "inc" in messages[0]
+    assert "counter" not in messages[0]
+
+
+@pytest.mark.asyncio
 async def test_transaction_log_custom_logger(tmp_path, format_config, caplog):
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)

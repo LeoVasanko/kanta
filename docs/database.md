@@ -163,6 +163,17 @@ when they have a default value.
 - Multiple handlers are supported and invoked in registration order.  A failing
   handler is logged and does not prevent subsequent handlers from running.
 
+#### Clock
+
+- `@kanta.clock` registers a callback `() -> datetime` that replaces the
+  default UTC clock.  Its value is used for all record timestamps (`ts`, and
+  `m` when `mtime` is `True`) and for snapshot timestamps.
+- The clock is only read when a timestamp is actually produced; no-op
+  transactions and skipped snapshot checks do not read it.
+- Register before `open()` so that bootstrap and migration records use the
+  custom clock as well.  This is mainly useful for tests and reproducible
+  demos.
+
 #### Transaction Log Formatting
 
 - Logfmt callbacks prettify identifiers in the change log and are registered with
@@ -196,6 +207,89 @@ def resolve_user(value: str, current: DictPost) -> str | None:
 def resolve_user_key(value: str) -> str | None:
     return names_by_id.get(value)
 ```
+
+#### Transaction Log Headers
+
+- By default a transaction is logged with an `action by user` header followed
+  by the diff lines.  Added paths are colored green, deleted paths red.
+- `kanta.transaction(..., extra=...)` accepts a display-only value that is
+  shown after the action in the header.  Anything other than `None` is
+  printed str-converted (colored by Kanta), unless a custom logemit handler
+  does something else with it; it is never persisted in the `ChangeRecord`.
+- `kanta.transaction(..., logdiff=False)` skips building and printing the diff
+  body and logs only the header, which is useful for large or noisy
+  changesets.  Diff output can also be disabled globally with
+  `configure_logging(diff=False)`; diff lines are emitted on the
+  `kanta.transaction.diff` child logger so applications can route or silence
+  them separately from the headers.
+
+#### Log Emitters
+
+- Every change-related message Kanta emits (transaction/bootstrap/migration
+  changes, `Created <file>`, migration summaries, aborted transactions) is
+  described by a `kanta.logging.LogEvent` and dispatched through
+  `kanta.logging.emit_event`.  Kanta's own output goes through the same
+  mechanism: when no `logemit` callback handles an event,
+  `kanta.logging.default_emit` renders it with the built-in formatting.
+- A `LogEvent` carries the event `kind` (`"change"`, `"created"`,
+  `"migrated"`, `"aborted"`), the preferred `logger` and `level`, the
+  `kanta` instance, and all relevant state: `action`, `user`, `extra`,
+  `error` (for aborted transactions), `diff`, `previous`/`current` state
+  dicts, the built `logfmt` chain, and version info for migration events.
+  Application-specific context (e.g. a connection id) can be stored in
+  `kanta.ctx` — a user-writable namespace — and read back in callbacks as
+  `event.kanta.ctx`, which also covers creation/bootstrap events.
+- The built-in formatting is assembled from standard blocks that custom
+  emitters can reuse as-is or replace piecemeal:
+  - `event.header` — a lazy property producing the default one-line header
+    for any kind: `<action>[ <extra>][ by <user>]` for changes,
+    `<action>[ <extra>][ by <user>] transaction aborted: <error>` for aborts,
+    and the
+    plain `Created`/`Migrated` summaries.  It is settable: assign
+    `event.header = ...` and return truthy to restyle the header while
+    keeping the default diff routing.
+  - `event.diff_lines` — a lazy property producing the pretty diff body for
+    change events (built only if accessed).
+  - `default_emit` itself is just `header` plus the `diff_lines` routing.
+- `@kanta.logemit` registers a callback receiving the event.  The callback
+  decides what is logged and where: it may log one or more messages on
+  `event.logger`, log somewhere else, or nothing at all.  A falsy return
+  value marks the event handled and stops the chain; a truthy return value
+  passes the event — possibly modified — to the next registered callback.
+  When all callbacks pass, `default_emit` renders the event; a callback may
+  also call `default_emit(event)` itself to delegate events it does not
+  customize.  Operational diagnostics (integrity errors, background flush
+  failures) do not go through this mechanism.
+- Logging never breaks functionality: a crashing `logemit` callback is
+  reported with `logger.exception` and the event falls back to the built-in
+  formatting; if the built-in formatting itself fails, the error is reported
+  and swallowed.  The same applies to `logfmt` callbacks (a failing one is
+  treated as a fall-through) and `logmigr` callbacks.
+
+```python
+@kanta.logemit
+def emit(ev: LogEvent):
+    if ev.kind != "change":
+        return default_emit(ev)  # delegate, no chaining needed
+    # Restyle the header; default_emit keeps routing the diff body.
+    ev.header = str(Line().user(ev.user or "-", width=20)(" ").action(ev.action))
+    return True
+```
+
+#### Terminal Formatting Helpers
+
+- `kanta.tty` provides the building blocks used by Kanta's own rendering:
+  - `colors`: the mutable color palette.  Colors are bare SGR parameter
+    strings (e.g. `"1;34"`, `"38;5;226"`) without escape framing.  Attributes
+    are read at render time, so assignments (`colors.action = "36"`) and
+    additions (`colors.session = "38;5;226"`) take effect immediately.
+  - `Line`: builds a terminal string part by part.  Calling it appends
+    content (`str`-converted); `.<colorname>` arms a palette color for the
+    next call only, and the reset is folded into a single escape sequence
+    with whatever color comes next.  `width=`/`align=` pad by display width;
+    `str(line)` finishes the line and restores default colors.
+  - `strip_ansi`, `displaywidth` (wide chars and emoji count correctly) and
+    `pad` for working with pre-colored strings.
 
 ## Migrations
 

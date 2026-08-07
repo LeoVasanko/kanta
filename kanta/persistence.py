@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import logging
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,7 @@ class PersistenceMixin:
     opened: bool
     readonly: bool
     mtime: datetime | None
+    clock: Callable[[], datetime] | None
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize persistence-owned state used by mixin methods."""
@@ -62,6 +65,31 @@ class PersistenceMixin:
         self.flush_interval = flush_interval
         self.version = 0
         self.mtime: datetime | None = None
+        self.clock: Callable[[], datetime] | None = None
+
+    def add_clock(self, callback) -> None:
+        """Register a clock callback ``() -> datetime`` replacing the UTC clock."""
+        if not callable(callback):
+            raise TypeError("clock callback must be callable")
+        for param in inspect.signature(callback).parameters.values():
+            if param.default is inspect.Parameter.empty and param.kind in (
+                param.POSITIONAL_ONLY,
+                param.POSITIONAL_OR_KEYWORD,
+                param.KEYWORD_ONLY,
+            ):
+                raise TypeError("clock callback must not require arguments")
+        self.clock = callback
+
+    def now(self) -> datetime:
+        """Current time from the registered clock (default: UTC now)."""
+        if self.clock is None:
+            return datetime.now(UTC)
+        ts = self.clock()
+        if not isinstance(ts, datetime):
+            raise TypeError(
+                f"clock callback must return a datetime, got {type(ts).__name__}"
+            )
+        return ts
 
     def add_fatal_error(self, callback) -> None:
         """Register one fatal error callback in call order."""
@@ -100,7 +128,9 @@ class PersistenceMixin:
 
     def maybe_snapshot(self) -> None:
         """Evaluate and possibly write a snapshot from current state."""
-        self.snapshot.maybe_write(self.file, self.version, self.statedict, m=self.mtime)
+        self.snapshot.maybe_write(
+            self.file, self.version, self.statedict, m=self.mtime, now=self.now
+        )
 
     def queue_change(
         self,
@@ -128,7 +158,14 @@ class PersistenceMixin:
             The queued :class:`ChangeRecord`, or ``None`` if the diff was empty
             and *force* is ``False``.
         """
-        now = datetime.now(UTC)
+        diff = compute_diff(self.statedict, current)
+        if not diff:
+            if not force:
+                return None
+            diff = {}
+
+        # The clock is only read when a record is actually queued.
+        now = self.now()
 
         if mtime is True:
             m = now
@@ -138,12 +175,6 @@ class PersistenceMixin:
             m = mtime
         else:
             raise TypeError("mtime must be True, False, or a datetime")
-
-        diff = compute_diff(self.statedict, current)
-        if not diff:
-            if not force:
-                return None
-            diff = {}
 
         record = ChangeRecord(
             ts=now,

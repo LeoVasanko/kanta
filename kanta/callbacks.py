@@ -7,11 +7,16 @@ default value.
 Log formatters are a special case: they are called per value being rendered
 and receive the value plus an optional ``path`` string.  They return
 ``str | None``; ``None`` means "fall through to the next formatter".
+
+Log emitters (``logemit``) are another special case: plain callables that
+receive a :class:`kanta.logging.LogEvent` and are dispatched by
+:func:`kanta.logging.emit_event`.
 """
 
 from __future__ import annotations
 
 import inspect
+import logging
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +27,8 @@ from kanta.migrations import MigrationResult
 
 DictPre = Annotated[dict, "pre"]
 DictPost = Annotated[dict, "post"]
+
+_logger = logging.getLogger(__name__)
 
 
 class LogFmt:
@@ -103,6 +110,7 @@ class CallbackRegistry:
             "logmigr": [],
         }
         self._logfmt_callbacks: list[_LogFmtFunctionSpec | _LogFmtClassSpec] = []
+        self._logemit_callbacks: list[Callable[..., Any]] = []
 
     def register(
         self,
@@ -121,6 +129,14 @@ class CallbackRegistry:
                 self._logfmt_callbacks.append(
                     self._validate_logfmt_function(callback, path=path)
                 )
+            return callback
+
+        if kind == "logemit":
+            if inspect.isclass(callback) or not callable(callback):
+                raise TypeError("logemit callbacks must be functions")
+            if inspect.iscoroutinefunction(callback):
+                raise TypeError("logemit callbacks must not be async")
+            self._logemit_callbacks.append(callback)
             return callback
 
         if kind not in self._callbacks:
@@ -175,7 +191,14 @@ class CallbackRegistry:
         """Return True if any callback of *kind* is registered."""
         if kind == "logfmt":
             return bool(self._logfmt_callbacks)
+        if kind == "logemit":
+            return bool(self._logemit_callbacks)
         return bool(self._callbacks[kind])
+
+    @property
+    def logemit_handlers(self) -> list[Callable[..., Any]]:
+        """Registered logemit callbacks in registration order."""
+        return self._logemit_callbacks
 
     def build_logfmt(self, ctx: InjectionContext) -> Callable[[Any, str], str | None]:
         """Build a chained formatter from registered logfmt callbacks."""
@@ -210,7 +233,13 @@ class CallbackRegistry:
             for fn, pattern in formatters:
                 if pattern is not None and path != pattern:
                     continue
-                resolved = fn(value, path)
+                try:
+                    resolved = fn(value, path)
+                except Exception:
+                    # Formatting must never break functionality; a failing
+                    # callback is reported and treated as a fall-through.
+                    _logger.exception("logfmt callback %r failed", fn)
+                    continue
                 if resolved is not None:
                     return resolved
             return None
@@ -454,7 +483,12 @@ class CallbackRegistry:
         if self._data_type is not None and bare is self._data_type:
             return kind == "bootstrap"
         if self._kanta_class is not None and bare is self._kanta_class:
-            return kind in {"bootstrap", "fatal_error", "logfmt", "logmigr"}
+            return kind in {
+                "bootstrap",
+                "fatal_error",
+                "logfmt",
+                "logmigr",
+            }
         return False
 
     def _allowed_message(self, kind: str) -> str:
@@ -462,7 +496,7 @@ class CallbackRegistry:
         if kind == "bootstrap":
             if self._data_type is not None:
                 parts.append(self._data_type.__name__)
-        if kind in {"bootstrap", "fatal_error", "logfmt"}:
+        if kind in {"bootstrap", "fatal_error", "logfmt", "logmigr"}:
             if self._kanta_class is not None:
                 parts.append(self._kanta_class.__name__)
         if kind == "fatal_error":

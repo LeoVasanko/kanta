@@ -1,9 +1,35 @@
 from kanta.logging import format_diff
+from kanta.tty import ESC, colors
+
+_ADD = f"{ESC}{colors.add}m"
+_DELETE = f"{ESC}{colors.delete}m"
 
 
 def test_add():
     lines = format_diff({"name": "Alice"}, previous={})
     assert any("name" in line for line in lines)
+
+
+def test_add_path_is_green():
+    lines = format_diff({"name": "Alice"}, previous={})
+    assert any(_ADD in line for line in lines)
+
+
+def test_nested_add_path_final_element_is_green():
+    lines = format_diff({"users": {"alice": 1}}, previous={"users": {}})
+    assert any(_ADD in line and "alice" in line for line in lines)
+
+
+def test_update_path_not_colored_as_add():
+    lines = format_diff({"name": "Bob"}, previous={"name": "Alice"})
+    assert lines
+    assert all(_ADD not in line for line in lines)
+
+
+def test_delete_path_not_colored_as_add():
+    lines = format_diff({"$delete": ["old_key"]}, previous={"old_key": 1})
+    assert any(_DELETE in line for line in lines)
+    assert all(_ADD not in line for line in lines)
 
 
 def test_update():

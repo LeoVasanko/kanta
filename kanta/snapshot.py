@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from kanta.structs import Snapshot
@@ -38,23 +39,29 @@ class SnapshotState:
         self.changes += count
 
     def maybe_write(
-        self, file, version: int, state: dict, m: datetime | None = None
+        self,
+        file,
+        version: int,
+        state: dict,
+        m: datetime | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         """Write snapshot when thresholds/time policy allows it."""
         force = self._force_pending
-        now = datetime.now(UTC)
+        if not force and self.changes < self._min_diffs:
+            return
+        # The clock is only read when a snapshot may actually be written.
+        ts = now() if now is not None else datetime.now(UTC)
         if not force:
-            if self.changes < self._min_diffs:
+            if ts.weekday() != 6:  # 6 = Sunday
                 return
-            if now.weekday() != 6:  # 6 = Sunday
-                return
-            sunday_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            sunday_midnight = ts.replace(hour=0, minute=0, second=0, microsecond=0)
             if self.ts is not None and self.ts >= sunday_midnight:
                 return
         if not file.is_open:
             return
         try:
-            self._write(file, version, state, now, m=m)
+            self._write(file, version, state, ts, m=m)
             self._force_pending = False
         except Exception as exc:
             _logger.error("snapshot: failed to write snapshot: %r", exc)
