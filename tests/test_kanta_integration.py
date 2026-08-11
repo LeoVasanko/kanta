@@ -562,13 +562,12 @@ async def test_migration_with_changes_records_diff_and_snapshot(
 
     records = read_changes(path, format_config)
     migration_records = [r for r in records if r.a.startswith("migrate")]
-    assert len(migration_records) == 2
+    # The version migration and the msgspec normalization that follows it are
+    # grouped into a single migrate:vN record.
+    assert len(migration_records) == 1
     assert migration_records[0].a == "migrate:v1"
     assert migration_records[0].v == 1
-    assert migration_records[0].diff == {"counter": 2}
-    assert migration_records[1].a == "migrate:msgspec"
-    assert migration_records[1].v == 1
-    assert migration_records[1].diff == {"users": {}}
+    assert migration_records[0].diff == {"counter": 2, "users": {}}
 
     snap = read_last_snapshot(path, format_config)
     assert snap is not None
