@@ -85,7 +85,9 @@ async def main() -> None:
                 data.total = 99
                 raise ValueError("simulated failure")
         except ValueError:
-            print(f"\nReset rolled back: {data.total=} (we can always read data without tx)\n")
+            print(
+                f"\nReset rolled back: {data.total=} (we can always read data without tx)\n"
+            )
 
         with kanta.transaction(action="delete", user="userid002") as data:
             del data.users["userid001"]

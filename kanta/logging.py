@@ -370,9 +370,7 @@ def _format_change_lines(
             keys = []
             for k in value:
                 key_path = _join_path(base_path, str(k))
-                keys.append(
-                    (k, _format_value(k, key_path, max_len=30, logfmt=logfmt))
-                )
+                keys.append((k, _format_value(k, key_path, max_len=30, logfmt=logfmt)))
             field_width = max(displaywidth(kd) for _, kd in keys)
             field_width = max(field_width, 12)
             # Each item line is "    {key:{field_width}}: {value}"; budget the
