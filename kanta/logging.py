@@ -187,6 +187,11 @@ def _join_path(path: str, key: str) -> str:
     return f"{path}.{key}"
 
 
+def _dim_ellipsis() -> str:
+    """Return the truncation ellipsis in the palette's ellipsis color."""
+    return str(Line().ellipsis("…"))
+
+
 def _format_value(
     value: Any,
     path: str,
@@ -209,7 +214,7 @@ def _format_value(
     if isinstance(value, str):
         value = _UNSAFE_CHARS.sub("", value)
         if len(value) > max_len:
-            return value[: max_len - 3] + "..."
+            return value[: max_len - 1] + _dim_ellipsis()
         return value
     if isinstance(value, dict):
         if not value:
@@ -235,7 +240,7 @@ def _format_value(
         return "[" + ", ".join(parts) + "]"
     text = str(value)
     if len(text) > max_len:
-        text = text[: max_len - 3] + "..."
+        text = text[: max_len - 1] + _dim_ellipsis()
     return text
 
 
@@ -361,15 +366,23 @@ def _format_change_lines(
         path_str = _format_path(path, logfmt, final_color="add")
         if isinstance(value, dict) and value:
             lines = [str(Line()("  ", path_str, " ").sep("="))]
-            formatted_items = []
             base_path = ".".join(path)
-            for k, v in value.items():
+            keys = []
+            for k in value:
                 key_path = _join_path(base_path, str(k))
-                key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
-                v_str = _format_value(v, key_path, max_len=30, logfmt=logfmt)
-                formatted_items.append((key_display, v_str))
-            field_width = max(displaywidth(k) for k, _ in formatted_items)
+                keys.append(
+                    (k, _format_value(k, key_path, max_len=30, logfmt=logfmt))
+                )
+            field_width = max(displaywidth(kd) for _, kd in keys)
             field_width = max(field_width, 12)
+            # Each item line is "    {key:{field_width}}: {value}"; budget the
+            # value so the whole line fits in 80 columns.
+            value_width = max(80 - 4 - field_width - 2, 20)
+            formatted_items = []
+            for (k, key_display), v in zip(keys, value.values()):
+                key_path = _join_path(base_path, str(k))
+                v_str = _format_value(v, key_path, max_len=value_width, logfmt=logfmt)
+                formatted_items.append((key_display, v_str))
             return lines + [
                 str(
                     Line()("    ", k).sep(":")(

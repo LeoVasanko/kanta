@@ -75,6 +75,7 @@ class Colors:
     path_final = "38;5;250"  # White for the final path element
     add = "32"  # Green for additions
     delete = "1;31"  # Bold red for deletions
+    ellipsis = "38;5;242"  # Dark grey for the truncation ellipsis
 
 
 colors = Colors()
