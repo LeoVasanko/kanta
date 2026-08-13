@@ -3,7 +3,13 @@
 import sys
 from datetime import UTC, datetime
 
-from kanta.__main__ import _extra_import_paths, _format_ts, main
+from kanta.__main__ import (
+    _extra_import_paths,
+    _format_ts,
+    _import_dotted,
+    _import_kanta_object,
+    main,
+)
 from kanta.serialization import JsonSerializer
 from kanta.serialization.framing import LineFramer
 from kanta.structs import ChangeRecord, Snapshot
@@ -98,3 +104,27 @@ def test_cli_snapshot_line_format(tmp_path, capsys):
     assert "\x1b[97msnapshot s0" in err
     assert "\x1b[38;5;250m v1 2026-08-12 09:00:00" in err
     assert "\x1b[38;5;242m 13 B" in err
+
+
+def test_import_dotted_from_file_path(tmp_path):
+    """--data can be a filesystem path with an optional colon-separated symbol."""
+    module = tmp_path / "models.py"
+    module.write_text("class Data:\n    pass\n")
+    result = _import_dotted(f"{module}:Data")
+    assert result.__name__ == "Data"
+
+
+def test_import_kanta_object_from_file_path(tmp_path):
+    """--kanta can be a filesystem path; default symbol is ``kanta``."""
+    module = tmp_path / "database.py"
+    module.write_text("class Kanta:\n    pass\nkanta = Kanta()\n")
+    result = _import_kanta_object(str(module))
+    assert type(result).__name__ == "Kanta"
+
+
+def test_import_kanta_object_from_file_path_with_symbol(tmp_path):
+    """--kanta can be a filesystem path with an explicit colon-separated symbol."""
+    module = tmp_path / "database.py"
+    module.write_text("class CustomKanta:\n    pass\nmy_kanta = CustomKanta()\n")
+    result = _import_kanta_object(f"{module}:my_kanta")
+    assert type(result).__name__ == "CustomKanta"

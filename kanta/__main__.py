@@ -54,7 +54,9 @@ class _CliError(Exception):
 
 
 def _import_dotted(path: str) -> Any:
-    """Import ``module.submodule.Attr`` and return the attribute."""
+    """Import ``module.submodule.Attr`` or a filesystem path and return the attribute."""
+    if _is_file_path(path):
+        return _import_from_file(path)
     if "." not in path:
         raise ValueError(f"dotted path must contain a dot: {path!r}")
     module_name, attr_name = path.rsplit(".", 1)
@@ -65,13 +67,71 @@ def _import_dotted(path: str) -> Any:
         raise ImportError(f"{path!r} not found in {module_name!r}") from exc
 
 
+def _is_file_path(path: str) -> bool:
+    """Return True if *path* looks like a filesystem path rather than a dotted name."""
+    return "/" in path or "\\" in path or ":" in path
+
+
+def _import_from_file(path: str) -> Any:
+    """Import a module or attribute from a filesystem path.
+
+    *path* may be ``path/to/file.py`` (returns the module) or
+    ``path/to/file.py:symbol`` (returns ``symbol`` from the module).
+    """
+    if ":" in path:
+        file_path, symbol = path.rsplit(":", 1)
+    else:
+        file_path, symbol = path, None
+
+    file_path = Path(file_path).resolve()
+    if not file_path.exists():
+        raise ImportError(f"{file_path!r} not found")
+    if not file_path.is_file():
+        raise ImportError(f"{file_path!r} is not a file")
+
+    module_name = f"_kanta_cli_{file_path.stem}_{file_path.stat().st_ino}"
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {file_path!r}")
+    module = importlib.util.module_from_spec(spec)
+
+    file_dir = str(file_path.parent)
+    added_dir = False
+    if file_dir not in sys.path:
+        sys.path.insert(0, file_dir)
+        added_dir = True
+    try:
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    finally:
+        if added_dir:
+            sys.path.remove(file_dir)
+
+    if symbol is None:
+        return module
+    try:
+        return getattr(module, symbol)
+    except AttributeError as exc:
+        raise ImportError(f"{symbol!r} not found in {file_path!r}") from exc
+
+
 def _import_kanta_object(path: str) -> Any:
-    """Import a Kanta object by module path.
+    """Import a Kanta object by module or filesystem path.
 
     If ``path`` names an importable module, look up an object named
-    ``kanta`` in it; otherwise treat ``path`` as ``module.attr`` referring
-    directly to the object.
+    ``kanta`` in it; otherwise treat ``path`` as ``module.attr`` or
+    ``path/to/file.py[:kanta]`` referring directly to the object.
     """
+    if _is_file_path(path):
+        if ":" in path:
+            return _import_from_file(path)
+        module = _import_from_file(path)
+        try:
+            return getattr(module, "kanta")
+        except AttributeError as exc:
+            raise ImportError(
+                f"no 'kanta' object found in {path!r}"
+            ) from exc
     try:
         spec = importlib.util.find_spec(path)
     except ImportError:
@@ -105,24 +165,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-d",
         "--data",
         metavar="MOD",
-        help="Dotted path to the root data type (e.g. myapp.models.Data).",
+        help=(
+            "Dotted path or filesystem path to the root data type."
+            " Examples: myapp.models.Data, myapp/models.py:Data."
+        ),
     )
     parser.add_argument(
         "-m",
         "--migrations",
         metavar="MOD",
-        help="Dotted path to the migrations module (e.g. myapp.migrations).",
+        help=(
+            "Dotted path or filesystem path to the migrations module."
+            " Examples: myapp.migrations, myapp/migrations.py."
+        ),
     )
     parser.add_argument(
         "-k",
         "--kanta",
         metavar="MOD",
         help=(
-            "Module path to an existing Kanta object to use: either a module"
-            " containing an object named 'kanta' (e.g. myapp.db) or a dotted"
-            " path to the object itself (e.g. myapp.db.kanta).  Its type,"
-            " migrations, and logfmt/logemit callbacks are used.  Cannot be"
-            " combined with -d or -m."
+            "Module path or filesystem path to an existing Kanta object to use."
+            " Either a module containing an object named 'kanta' (e.g. myapp.db),"
+            " a dotted path to the object (e.g. myapp.db.kanta), or a file path"
+            " (e.g. myapp/db.py or myapp/db.py:kanta).  Its type, migrations, and"
+            " logfmt/logemit callbacks are used.  Cannot be combined with -d or -m."
         ),
     )
     parser.add_argument(
