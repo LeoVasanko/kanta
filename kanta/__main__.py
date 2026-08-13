@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib
 import importlib.util
 import logging
@@ -196,6 +197,46 @@ def _format_size(n: int) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
+def _find_venv_site_packages(start: Path) -> list[Path]:
+    """Return site-packages dirs of ``.venv`` directories from *start* to parents."""
+    found: list[Path] = []
+    for parent in [start, *start.parents]:
+        venv = parent / ".venv"
+        if not venv.is_dir():
+            continue
+        for site_packages in venv.glob("lib/python*/site-packages"):
+            found.append(site_packages)
+            break
+        else:
+            win_site = venv / "Lib" / "site-packages"
+            if win_site.is_dir():
+                found.append(win_site)
+    return found
+
+
+@contextlib.contextmanager
+def _extra_import_paths():
+    """Temporarily add current dir and nearby venv site-packages to ``sys.path``.
+
+    The current directory is inserted first, then local ``.venv`` site-packages,
+    then any parent ``.venv`` site-packages.  Only paths that were not already
+    present are added, and only those added paths are removed on exit.
+    """
+    paths_to_add = [str(Path.cwd())]
+    paths_to_add.extend(str(p) for p in _find_venv_site_packages(Path.cwd()))
+    added: list[str] = []
+    for path in reversed(paths_to_add):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+            added.append(path)
+    try:
+        yield
+    finally:
+        for path in added:
+            if path in sys.path:
+                sys.path.remove(path)
+
+
 def _print_snapshot_indicator(
     label: str,
     snap: Snapshot,
@@ -305,16 +346,18 @@ async def _run(args: argparse.Namespace) -> int:
 
     data_type: type[Any] | None = None
     if args.data:
-        try:
-            data_type = _import_dotted(args.data)
-        except (ImportError, ValueError) as exc:
-            raise _CliError(f"Invalid --data value: {exc}") from exc
+        with _extra_import_paths():
+            try:
+                data_type = _import_dotted(args.data)
+            except (ImportError, ValueError) as exc:
+                raise _CliError(f"Invalid --data value: {exc}") from exc
 
     kanta: Kanta[Any] | None = None
     kanta_owned = False
     kanta_typed: Kanta[Any] | None = None
     try:
-        kanta, kanta_owned = _get_kanta(args, filename)
+        with _extra_import_paths():
+            kanta, kanta_owned = _get_kanta(args, filename)
         if data_type is None and args.kanta and kanta._impl.data_type is not dict:
             data_type = kanta._impl.data_type
 
@@ -478,8 +521,6 @@ async def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python -m kanta``."""
-    if "." not in sys.path:
-        sys.path.insert(0, ".")
     args = _parse_args(argv)
     try:
         return asyncio.run(_run(args))
