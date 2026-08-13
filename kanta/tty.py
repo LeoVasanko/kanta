@@ -70,6 +70,7 @@ class Colors:
     action = "1;34"  # Bold blue for the action name
     user = "34"  # Blue for the user display
     target = "38;5;250"  # White for the extra/target display
+    snapshot = "97"  # Bright white for snapshot indicator text
     sep = "38;5;242"  # Dark grey for separators
     path_prefix = "38;5;242"  # Dark grey for the leading part of a dotted path
     path_final = "38;5;250"  # White for the final path element
