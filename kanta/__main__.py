@@ -478,6 +478,8 @@ async def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python -m kanta``."""
+    if "." not in sys.path:
+        sys.path.insert(0, ".")
     args = _parse_args(argv)
     try:
         return asyncio.run(_run(args))
