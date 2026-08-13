@@ -199,18 +199,20 @@ def _format_size(n: int) -> str:
 
 def _find_venv_site_packages(start: Path) -> list[Path]:
     """Return site-packages dirs of ``.venv`` directories from *start* to parents."""
+    py_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
     found: list[Path] = []
     for parent in [start, *start.parents]:
         venv = parent / ".venv"
         if not venv.is_dir():
             continue
-        for site_packages in venv.glob("lib/python*/site-packages"):
+        site_packages = venv / "lib" / py_dir / "site-packages"
+        if site_packages.is_dir():
             found.append(site_packages)
-            break
-        else:
-            win_site = venv / "Lib" / "site-packages"
-            if win_site.is_dir():
-                found.append(win_site)
+            continue
+        # Windows layout
+        win_site = venv / "Lib" / "site-packages"
+        if win_site.is_dir():
+            found.append(win_site)
     return found
 
 

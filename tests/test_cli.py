@@ -51,6 +51,25 @@ def test_extra_import_paths_are_temporary(tmp_path, monkeypatch):
     assert sys.path == before
 
 
+def test_extra_import_paths_ignores_other_python_versions(tmp_path, monkeypatch):
+    """Only the site-packages for the running Python version is picked up."""
+    current_site = (
+        tmp_path
+        / ".venv"
+        / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    other_site = tmp_path / ".venv" / "lib" / "python9.9" / "site-packages"
+    current_site.mkdir(parents=True)
+    other_site.mkdir(parents=True)
+
+    monkeypatch.chdir(tmp_path)
+    with _extra_import_paths():
+        assert str(current_site) in sys.path
+        assert str(other_site) not in sys.path
+
+
 def test_cli_snapshot_line_format(tmp_path, capsys):
     """Snapshot lines are timestamped and colored with metadata."""
     path = tmp_path / "test.kantadb"
