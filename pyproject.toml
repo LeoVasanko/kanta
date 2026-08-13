@@ -21,6 +21,9 @@ dependencies = [
     "msgspec>=0.20.0",
 ]
 
+[project.scripts]
+kanta = "kanta.__main__:main"
+
 [project.optional-dependencies]
 bin = [
     "blake3>=1.0.8",

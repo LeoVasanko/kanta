@@ -124,19 +124,22 @@ class LogEvent(msgspec.Struct, kw_only=True):
 def emit_event(
     ev: LogEvent,
     handlers: Iterable[Callable[[LogEvent], Any]] = (),
+    *,
+    fallback: Callable[[LogEvent], None] | None = None,
 ) -> None:
     """Dispatch *ev* through registered logemit handlers.
 
     Each handler receives the event and may log it (or not) as it sees fit.
     A falsy return value stops the chain: the event is considered handled.
     A truthy return value passes the event — possibly modified — to the next
-    handler.  When all handlers pass, :func:`default_emit` renders the event
-    with the built-in formatting.
+    handler.  When all handlers pass, the *fallback* renders the event;
+    the default fallback is :func:`default_emit` with the built-in formatting.
 
     Logging must never break functionality: a crashing handler is reported
-    and the chain falls back to the built-in formatting, and a failure in
-    the built-in formatting itself is reported and swallowed.
+    and the chain falls back to the fallback rendering, and a failure in
+    the fallback itself is reported and swallowed.
     """
+    render = fallback if fallback is not None else default_emit
     try:
         for handler in handlers:
             try:
@@ -146,7 +149,7 @@ def emit_event(
                 break
             if not proceed:
                 return
-        default_emit(ev)
+        render(ev)
     except Exception:
         _logger.exception("failed to emit %s log event", ev.kind)
 
