@@ -34,11 +34,20 @@ class MigrationInfo:
 
 
 @dataclass
-class MigrationResult:
-    """Result of applying migrations."""
+class MigrationReport:
+    """Report of applying migrations."""
 
     version: int
-    migrations: list[MigrationInfo]
+    original: int
+    applied: list[MigrationInfo]
+
+    @property
+    def migrations(self) -> list[MigrationInfo]:
+        """Deprecated alias for :attr:`applied`."""
+        return self.applied
+
+
+MigrationResult = MigrationReport  # deprecated alias for MigrationReport
 
 
 class Migrations:
@@ -57,13 +66,13 @@ class Migrations:
         def migrate_v2(d: dict) -> None:
             d.setdefault("version", 2)
 
-        result = migrations.apply(state, current_version=0, kanta=kanta)
-        new_version = result.version
+        report = migrations.apply(state, current_version=0, kanta=kanta)
+        new_version = report.version
 
     Or load from a module::
 
         migrations = Migrations.from_module("myapp.migrations")
-        result = migrations.apply(state, current_version=0, kanta=kanta)
+        report = migrations.apply(state, current_version=0, kanta=kanta)
     """
 
     def __init__(self) -> None:
@@ -137,7 +146,7 @@ class Migrations:
         data_dict: dict[str, Any],
         current_version: int,
         kanta: Any,
-    ) -> MigrationResult:
+    ) -> MigrationReport:
         """Apply pending migrations to *data_dict* in place.
 
         Missing intermediate migration steps are silently skipped.
@@ -146,8 +155,8 @@ class Migrations:
             DatabaseError: If the database version is newer than the highest
                 supported version or older than the minimum supported version.
 
-        Returns a :class:`MigrationResult` describing the new version and every
-        migration that ran.
+        Returns a :class:`MigrationReport` describing the original and new
+        versions and every migration that ran.
         """
         if current_version > self.dbver:
             raise DatabaseError(
@@ -161,6 +170,7 @@ class Migrations:
             )
 
         migrations: list[MigrationInfo] = []
+        original = current_version
         for version in sorted(self._migrations.keys()):
             if version <= current_version:
                 continue
@@ -181,4 +191,6 @@ class Migrations:
                     before=before,
                 )
             )
-        return MigrationResult(version=current_version, migrations=migrations)
+        return MigrationReport(
+            version=current_version, original=original, applied=migrations
+        )

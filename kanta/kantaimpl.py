@@ -19,7 +19,7 @@ from kanta.logging import (
     emit_event,
     migration_logger,
 )
-from kanta.migrations import MigrationResult, Migrations
+from kanta.migrations import MigrationReport, Migrations
 from kanta.persistence import PersistenceMixin
 from kanta.serialization import restore_data_in_place, struct_to_dict
 from kanta.serialization.base import replay
@@ -97,19 +97,18 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
     async def _handle_migration_log(
         self,
-        migration_result: MigrationResult,
-        previous_version: int,
+        report: MigrationReport,
         log: bool | logging.Logger,
     ) -> None:
         """Route migration logging to callback or default logger."""
-        assert isinstance(migration_result, MigrationResult)
+        assert isinstance(report, MigrationReport)
 
         if self.callback_registry.has("logmigr"):
             await self.callback_registry.invoke(
                 "logmigr",
                 InjectionContext(
                     kanta=self._kanta,
-                    migration_result=migration_result,
+                    report=report,
                 ),
                 on_error=_log_callback_error,
             )
@@ -120,7 +119,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         migration_log = log if isinstance(log, logging.Logger) else migration_logger
 
-        changed = [m for m in migration_result.migrations if m.changed]
+        changed = [m for m in report.applied if m.changed]
         if not changed:
             return
 
@@ -131,8 +130,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 logger=migration_log,
                 kanta=self._kanta,
                 filename=str(self.filename),
-                from_version=previous_version,
-                to_version=migration_result.version,
+                from_version=report.original,
+                to_version=report.version,
                 migrations=descriptions,
             ),
             self.callback_registry.logemit_handlers,
@@ -211,15 +210,15 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     cause_type=type(e).__name__,
                 ) from e
 
-            migration_result = None
+            migration_report = None
             state_before_migrations = None
             previous_version = rr.version
             if self.migrations is not None:
                 state_before_migrations = copy.deepcopy(rr.state)
-                migration_result = self.migrations.apply(
+                migration_report = self.migrations.apply(
                     rr.state, rr.version, self._kanta
                 )
-                rr.version = migration_result.version
+                rr.version = migration_report.version
 
             migrations_ran = rr.version != previous_version
 
@@ -267,10 +266,8 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 )
                 record = self.queue_change(action, normalized, mtime=False)
                 # The migration summary introduces the diff, so log it first.
-                if migrations_ran and migration_result is not None:
-                    await self._handle_migration_log(
-                        migration_result, previous_version, log
-                    )
+                if migrations_ran and migration_report is not None:
+                    await self._handle_migration_log(migration_report, log)
                 if (
                     record is not None
                     and log is not False

@@ -86,10 +86,9 @@ def test_cli_snapshot_line_format(tmp_path, capsys):
 
     snapshot = Snapshot(ts=ts, v=1, m=mtime, state={"counter": 5})
     change = ChangeRecord(ts=ts, a="inc", v=1, u="user1", diff={"counter": 6})
-    data = (
-        framer.frame_snapshot(serializer.encode(snapshot), record_offset=0)
-        + framer.frame_change(serializer.encode(change), record_offset=0)
-    )
+    data = framer.frame_snapshot(
+        serializer.encode(snapshot), record_offset=0
+    ) + framer.frame_change(serializer.encode(change), record_offset=0)
     path.write_bytes(data)
 
     code = main([str(path)])

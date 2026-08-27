@@ -129,9 +129,7 @@ def _import_kanta_object(path: str) -> Any:
         try:
             return getattr(module, "kanta")
         except AttributeError as exc:
-            raise ImportError(
-                f"no 'kanta' object found in {path!r}"
-            ) from exc
+            raise ImportError(f"no 'kanta' object found in {path!r}") from exc
     try:
         spec = importlib.util.find_spec(path)
     except ImportError:
@@ -141,9 +139,7 @@ def _import_kanta_object(path: str) -> Any:
         try:
             return getattr(module, "kanta")
         except AttributeError as exc:
-            raise ImportError(
-                f"no 'kanta' object found in module {path!r}"
-            ) from exc
+            raise ImportError(f"no 'kanta' object found in module {path!r}") from exc
     return _import_dotted(path)
 
 
@@ -344,16 +340,14 @@ async def _log_migration(
         try:
             await registry.invoke(
                 "logmigr",
-                InjectionContext(kanta=kanta, migration_result=result),
+                InjectionContext(kanta=kanta, report=result),
             )
         except Exception:
             _logger.exception("logmigr callback failed")
         return
     if quiet:
         return
-    descriptions = [
-        f"{m.name} ({m.description})" for m in result.migrations if m.changed
-    ]
+    descriptions = [f"{m.name} ({m.description})" for m in result.applied if m.changed]
     emit_event(
         LogEvent(
             kind="migrated",
@@ -369,9 +363,7 @@ async def _log_migration(
     )
 
 
-def _get_kanta(
-    args: argparse.Namespace, filename: Path
-) -> tuple[Kanta[Any], bool]:
+def _get_kanta(args: argparse.Namespace, filename: Path) -> tuple[Kanta[Any], bool]:
     """Return the Kanta instance to work with, and whether the CLI owns it.
 
     With ``-k`` the existing object is used as-is (and never closed by us);
@@ -391,9 +383,7 @@ def _get_kanta(
         return Kanta(filename, {}, type=dict, migrations=args.migrations), True
     except Exception as exc:
         if args.migrations:
-            raise _CliError(
-                f"Migration error: {exc}", EXIT_MIGRATION_ERROR
-            ) from exc
+            raise _CliError(f"Migration error: {exc}", EXIT_MIGRATION_ERROR) from exc
         raise _CliError(f"Failed to initialize database: {exc}") from exc
 
 
@@ -473,9 +463,7 @@ async def _run(args: argparse.Namespace) -> int:
             state = {}
             version = 0
             printed = False
-            for event, previous, current in replay_events(
-                events, selection.end_line
-            ):
+            for event, previous, current in replay_events(events, selection.end_line):
                 state = current
                 version = event.version
                 if event.line_number < selection.start_line or args.quiet:
@@ -506,7 +494,9 @@ async def _run(args: argparse.Namespace) -> int:
                     f"Migration error: {exc}", EXIT_MIGRATION_ERROR
                 ) from exc
             if version != previous_version:
-                await _log_migration(kanta, filename, result, previous_version, args.quiet)
+                await _log_migration(
+                    kanta, filename, result, previous_version, args.quiet
+                )
 
         output_state: dict[str, Any]
         if data_type is not None:
@@ -529,9 +519,7 @@ async def _run(args: argparse.Namespace) -> int:
                 # the object's own serializer, and its migrations were applied
                 # to the state; no need to re-open through a new instance.
                 print(f"{data}", file=sys.stderr)
-                output_state = struct_to_dict(
-                    data, serializer=kanta._impl.serializer
-                )
+                output_state = struct_to_dict(data, serializer=kanta._impl.serializer)
             else:
                 kanta_typed = Kanta(
                     filename, data, type=data_type, migrations=args.migrations
@@ -544,9 +532,7 @@ async def _run(args: argparse.Namespace) -> int:
                         f"Validation error: {exc}", EXIT_VALIDATION_ERROR
                     ) from exc
                 except DataIntegrityError as exc:
-                    raise _CliError(
-                        f"Parse error: {exc}", EXIT_PARSE_ERROR
-                    ) from exc
+                    raise _CliError(f"Parse error: {exc}", EXIT_PARSE_ERROR) from exc
                 except DatabaseError as exc:
                     if not args.migrations or exc.cause_type == "ReplayError":
                         raise _CliError(
@@ -560,9 +546,7 @@ async def _run(args: argparse.Namespace) -> int:
                         raise _CliError(
                             f"Migration error: {exc}", EXIT_MIGRATION_ERROR
                         ) from exc
-                    raise _CliError(
-                        f"Failed to open {filename}: {exc}"
-                    ) from exc
+                    raise _CliError(f"Failed to open {filename}: {exc}") from exc
                 output_state = kanta_typed._impl.statedict
         else:
             output_state = state

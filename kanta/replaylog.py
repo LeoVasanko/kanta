@@ -113,15 +113,11 @@ def scan_events(content: bytes, kanta: Kanta[Any]) -> tuple[list[Event], int]:
                         record_type="snapshot",
                     )
                 state = snap.state
-                events.append(
-                    SnapshotEvent(line_number, byte_pos, record_index, snap)
-                )
+                events.append(SnapshotEvent(line_number, byte_pos, record_index, snap))
             else:
                 record = impl.serializer.decode(payload, type=ChangeRecord)
                 state = patch_state(state, record.diff)
-                events.append(
-                    ChangeEvent(line_number, byte_pos, record_index, record)
-                )
+                events.append(ChangeEvent(line_number, byte_pos, record_index, record))
                 change_count += 1
         except msgspec.DecodeError as exc:
             raise ReplayError(
@@ -294,17 +290,13 @@ def _bound_to_line(
     raise ValueError(f"unknown range unit: {unit}")
 
 
-def _resolve_range(
-    range_str: str, events: list[Event], total: int
-) -> tuple[int, int]:
+def _resolve_range(range_str: str, events: list[Event], total: int) -> tuple[int, int]:
     """Parse a range string into a [start_line, end_line) line range."""
     sep = ".." if ".." in range_str else ":"
     start_str, end_str = range_str.split(sep, 1)
     start_unit, start_val = _parse_bound(start_str)
     end_unit, end_val = _parse_bound(end_str)
-    start_line = _bound_to_line(
-        start_unit, start_val, events, total, is_start=True
-    )
+    start_line = _bound_to_line(start_unit, start_val, events, total, is_start=True)
     end_line = _bound_to_line(end_unit, end_val, events, total, is_start=False)
     # ``..`` makes the end bound inclusive.
     if sep == ".." and end_val is not None:
@@ -341,9 +333,7 @@ def select(spec: str, events: list[Event], total: int) -> Selection:
         n_snapshots = sum(isinstance(e, SnapshotEvent) for e in events)
         count = _plural(n_snapshots, "snapshot")
         if not 0 <= idx < len(lines):
-            raise RangeNotFoundError(
-                f"Snapshot {spec!r} not found in file ({count})"
-            )
+            raise RangeNotFoundError(f"Snapshot {spec!r} not found in file ({count})")
         event = _event_at_line(events, lines[idx])
         if event is None:
             # s0 with an empty initial state (l0): not a real record, so it
@@ -372,8 +362,7 @@ def select(spec: str, events: list[Event], total: int) -> Selection:
         lines = _version_lines(events)
         if value not in lines:
             raise RangeNotFoundError(
-                f"Version {spec!r} not found in file"
-                f" ({_plural(len(lines), 'version')})"
+                f"Version {spec!r} not found in file ({_plural(len(lines), 'version')})"
             )
         start_line = lines[value]
         later = [line for line in lines.values() if line > start_line]
@@ -383,8 +372,7 @@ def select(spec: str, events: list[Event], total: int) -> Selection:
     idx = total + value if value < 0 else value
     if not 0 <= idx < total:
         raise RangeNotFoundError(
-            f"Change index {spec!r} not found in file"
-            f" ({_plural(total, 'change')})"
+            f"Change index {spec!r} not found in file ({_plural(total, 'change')})"
         )
     end_line = lines[idx + 1] if idx + 1 < total else end_of_file(events)
     return Selection(lines[idx], end_line)

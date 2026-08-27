@@ -6,9 +6,7 @@ from pathlib import Path
 
 import msgspec
 
-from kanta import Kanta
-from kanta.callbacks import DictPre
-from kanta.logging import configure_logging
+from kanta import Kanta, configure_logging
 
 
 filename = Path(__file__).with_name("demo.kantadb")
@@ -47,11 +45,11 @@ kanta_v1 = Kanta(filename, Data(), migrations=sys.modules[__name__])
 
 
 @kanta_v1.logfmt
-def resolve_user(value: str, path: str, previous: DictPre) -> str | None:
+def resolve_user(value: str, path: str, state: dict) -> str | None:
     """Resolve user ids to names from the database state itself."""
     if path != "$user" and not path.startswith("users."):
         return None
-    return previous.get("users", {}).get(value, {}).get("name")
+    return state.get("users", {}).get(value, {}).get("name")
 
 
 async def main() -> None:

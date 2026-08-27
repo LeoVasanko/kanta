@@ -722,6 +722,41 @@ async def test_logmigr_callback_replaces_default_logging(
 
 
 @pytest.mark.asyncio
+async def test_logmigr_callback_report(tmp_path, format_config, caplog):
+    import logging
+
+    from kanta import MigrationReport
+
+    path = tmp_path / "test.db"
+    seed_single_change(path, fixed_change("init", {"counter": 0}), format_config)
+
+    mod = type(sys)("test_migrations_report")
+
+    def migrate_v1(d):
+        """Bump counter."""
+        d["counter"] = 2
+
+    mod.__dict__["migrate_v1"] = migrate_v1
+
+    reports = []
+
+    kanta = make_kanta(path, Data, format_config, migrations=mod)
+
+    @kanta.logmigr
+    def collect(report: MigrationReport):
+        reports.append(report)
+
+    with caplog.at_level(logging.INFO, logger="kanta.migration"):
+        await kanta.open()
+        await kanta.close()
+
+    assert len(reports) == 1
+    assert reports[0].original == 0
+    assert reports[0].version == 1
+    assert [m.name for m in reports[0].applied] == ["migrate_v1"]
+
+
+@pytest.mark.asyncio
 async def test_transaction_log_false_suppresses_log(tmp_path, format_config, caplog):
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)

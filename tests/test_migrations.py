@@ -206,3 +206,22 @@ def test_description_defaults_to_version_when_no_docstring():
 
     result = reg.apply({}, current_version=0, kanta=kanta)
     assert result.migrations[0].description == "v1"
+
+
+def test_report_fields():
+    from kanta import MigrationReport
+
+    reg = Migrations()
+    kanta = _DummyKanta()
+
+    @reg.register
+    def migrate_v1(d):
+        d["x"] = 1
+
+    report = reg.apply({"x": 0}, current_version=0, kanta=kanta)
+    assert isinstance(report, MigrationReport)
+    assert report.original == 0
+    assert report.version == 1
+    assert [m.name for m in report.applied] == ["migrate_v1"]
+    # Deprecated alias still works.
+    assert report.migrations is report.applied

@@ -2,7 +2,7 @@ from typing import Any, Optional, Union
 
 import pytest
 
-from kanta import Kanta
+from kanta import DictPrev, DictState, Kanta
 from kanta.callbacks import DictPost, DictPre, LogFmt
 from kanta.exceptions import DatabaseError
 
@@ -164,6 +164,106 @@ async def test_logfmt_injects_states(tmp_path, format_config, caplog):
     await kanta.close()
 
     assert "Alice" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_logfmt_injects_states_by_name(tmp_path, format_config, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.logfmt
+    def resolve_users(value: str, prev, state: dict | None) -> str | None:
+        assert prev == {}
+        assert state is not None
+        return state.get("users", {}).get(value, {}).get("name")
+
+    await kanta.open()
+
+    with kanta.transaction(action="create_user") as data:
+        data.users["uuid-9"] = User(name="Carol")
+
+    await kanta.close()
+
+    assert "Carol" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_logfmt_state_name_ignores_annotation(tmp_path, format_config, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    # Matching by name does not check the annotation.
+    @kanta.logfmt
+    def resolve_users(value: str, state: int) -> str | None:
+        return state.get("users", {}).get(value, {}).get("name")
+
+    await kanta.open()
+
+    with kanta.transaction(action="create_user") as data:
+        data.users["uuid-10"] = User(name="Dave")
+
+    await kanta.close()
+
+    assert "Dave" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_logfmt_tag_takes_precedence_over_name(tmp_path, format_config, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.logfmt
+    def check_prev(value: str, anything: DictPrev) -> str | None:
+        assert anything == {}
+        return None
+
+    @kanta.logfmt
+    def resolve_users(value: str, prev: DictState) -> str | None:
+        # The tag wins: prev receives the current state despite its name.
+        return prev.get("users", {}).get(value, {}).get("name")
+
+    await kanta.open()
+
+    with kanta.transaction(action="create_user") as data:
+        data.users["uuid-11"] = User(name="Erin")
+
+    await kanta.close()
+
+    assert "Erin" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_logfmt_class_state_attribute(tmp_path, format_config, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="kanta.transaction")
+    path = tmp_path / "test.db"
+    kanta = make_kanta(path, Data, format_config)
+
+    @kanta.logfmt
+    class UserLogFmt(LogFmt):
+        def resolve(self, value: str, path: str) -> str | None:
+            if not isinstance(value, str):
+                return None
+            return self.state.get("users", {}).get(value, {}).get("name")
+
+    await kanta.open()
+
+    with kanta.transaction(action="create_user") as data:
+        data.users["uuid-12"] = User(name="Fred")
+
+    await kanta.close()
+
+    assert "Fred" in caplog.text
 
 
 @pytest.mark.asyncio

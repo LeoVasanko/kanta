@@ -281,7 +281,7 @@ class Kanta(Generic[T]):
         """Register a migration logging callback.
 
         Can be used as ``@kanta.logmigr``.
-        The callback receives a :class:`kanta.migrations.MigrationResult` and
+        The callback receives a :class:`kanta.migrations.MigrationReport` and
         may be sync or async. If registered, it replaces the default migration
         logger output; the application is responsible for emitting any log
         messages.

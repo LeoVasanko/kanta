@@ -186,9 +186,13 @@ when they have a default value.
   transaction actor, replacing the old `user_display` parameter.
 - The callback returns `str | None`: a string replaces the default rendering,
   while `None` means "fall through to the next formatter".
-- State dicts can be injected via `DictPre` (`Annotated[dict, "pre"]`)
-  and `DictPost` (`Annotated[dict, "post"]`); the `Kanta` instance can also be
-  injected.
+- State dicts are injected by parameter name or annotation tag, which share
+  the same vocabulary: `prev` receives the previous state dict and `state`
+  the current one.  Matching by name ignores the annotation entirely.  The
+  `DictPrev`/`DictState` aliases (`Annotated[dict, "prev"]` /
+  `Annotated[dict, "state"]`) work under any parameter name, and a tag takes
+  precedence over the name.  `DictPre` and `DictPost` are kept as aliases of
+  `DictPrev` and `DictState`.  The `Kanta` instance can also be injected.
 - Alternatively, a logfmt callback can be a class inheriting from `LogFmt`; the
   framework instantiates it with the state dicts and calls its
   `resolve(value, path) -> str | None` method.
@@ -201,8 +205,8 @@ values at that exact path:
 
 ```python
 @kanta.logfmt(path="$user")
-def resolve_user(value: str, current: DictPost) -> str | None:
-    return current.get("users", {}).get(value, {}).get("name")
+def resolve_user(value: str, state: dict) -> str | None:
+    return state.get("users", {}).get(value, {}).get("name")
 
 @kanta.logfmt(path="users.uuid-1")
 def resolve_user_key(value: str) -> str | None:

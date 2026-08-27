@@ -1,8 +1,8 @@
 """Unified decorator-based callback registry for Kanta.
 
-Callbacks are registered once and invoked with arguments filled by their
-annotation types.  Unknown arguments are only permitted when they have a
-default value.
+Callbacks are registered once and invoked with arguments filled from their
+parameter names (state dicts: ``prev`` / ``state``) and annotation types.
+Unknown arguments are only permitted when they have a default value.
 
 Log formatters are a special case: they are called per value being rendered
 and receive the value plus an optional ``path`` string.  They return
@@ -23,10 +23,36 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Union, get_args, get_origin
 
 from kanta.exceptions import DatabaseError
-from kanta.migrations import MigrationResult
+from kanta.migrations import MigrationReport
 
-DictPre = Annotated[dict, "pre"]
-DictPost = Annotated[dict, "post"]
+DictPrev = DictPre = Annotated[dict, "prev"]
+DictState = DictPost = Annotated[dict, "state"]
+
+# State-dict injection keys, shared by parameter names and annotation tags:
+# a callback parameter named *or* tagged ``prev``/``state`` receives the
+# previous or current state dict respectively.  Matching by name does not
+# check the annotation; an explicit tag takes precedence over the name.
+_STATE_KINDS = {"prev": "previous_state", "state": "current_state"}
+
+
+def _state_key(text: Any) -> str | None:
+    """Return the state kind for a parameter name or annotation tag."""
+    return text if text in _STATE_KINDS else None
+
+
+def _state_tag(ann: Any) -> str | None:
+    """Return the state tag of an ``Annotated[dict, ...]`` annotation, if any."""
+    if get_origin(ann) is not Annotated:
+        return None
+    args = get_args(ann)
+    if not args or args[0] is not dict:
+        return None
+    for meta in args[1:]:
+        key = _state_key(meta)
+        if key is not None:
+            return key
+    return None
+
 
 _logger = logging.getLogger(__name__)
 
@@ -35,16 +61,18 @@ class LogFmt:
     """Base class for stateful logfmt callbacks.
 
     Subclasses only need to override :meth:`resolve`.  The framework injects
-    ``previous_state`` and ``current_state`` through ``__init__``.
+    the previous and current state dicts through ``__init__`` and exposes them
+    as ``previous_state`` and ``state``.
     """
 
     def __init__(
         self,
-        previous: DictPre | None = None,
-        current: DictPost | None = None,
+        prev: dict | None = None,
+        state: dict | None = None,
     ) -> None:
-        self.previous_state = previous
-        self.current_state = current
+        self.previous_state = prev
+        self.state = state
+        self.current_state = state  # deprecated alias for ``state``
 
     def __call__(self, value: Any, path: str) -> str | None:
         return self.resolve(value, path)
@@ -67,7 +95,7 @@ class InjectionContext:
     error: DatabaseError | None = None
     previous_state: dict | None = None
     current_state: dict | None = None
-    migration_result: MigrationResult | None = None
+    report: MigrationReport | None = None
 
 
 @dataclass
@@ -261,6 +289,9 @@ class CallbackRegistry:
                 )
 
             if param.annotation is inspect.Parameter.empty:
+                if _state_key(name) is not None:
+                    params.append((name, dict))
+                    continue
                 if param.default is inspect.Parameter.empty:
                     raise TypeError(
                         f"{kind} callback {callback.__name__} has parameter "
@@ -269,6 +300,11 @@ class CallbackRegistry:
                 continue
 
             ann = self._resolve_raw_annotation(param.annotation, callback)
+            if _state_key(name) is not None:
+                # The name alone selects state injection; an explicit tag
+                # still overrides it.  The annotation is not checked.
+                params.append((name, ann))
+                continue
             if not self._is_allowed(kind, ann):
                 if param.default is inspect.Parameter.empty:
                     raise TypeError(
@@ -329,6 +365,9 @@ class CallbackRegistry:
                     f"*args or **kwargs"
                 )
             if param.annotation is inspect.Parameter.empty:
+                if _state_key(name) is not None:
+                    inject_params.append((name, dict))
+                    continue
                 if param.default is inspect.Parameter.empty:
                     raise TypeError(
                         f"logfmt callback {callback.__name__} has parameter "
@@ -337,6 +376,11 @@ class CallbackRegistry:
                 continue
 
             ann = self._resolve_raw_annotation(param.annotation, callback)
+            if _state_key(name) is not None:
+                # The name alone selects state injection; an explicit tag
+                # still overrides it.  The annotation is not checked.
+                inject_params.append((name, ann))
+                continue
             if name == "path" and self._unwrap_optional(ann) is str:
                 has_path = True
                 continue
@@ -392,6 +436,9 @@ class CallbackRegistry:
                     f"*args or **kwargs"
                 )
             if param.annotation is inspect.Parameter.empty:
+                if _state_key(name) is not None:
+                    inject_params.append((name, dict))
+                    continue
                 if param.default is inspect.Parameter.empty:
                     raise TypeError(
                         f"logfmt class {cls.__name__}.__init__ has parameter "
@@ -400,6 +447,11 @@ class CallbackRegistry:
                 continue
 
             ann = self._resolve_raw_annotation(param.annotation, cls.__init__)
+            if _state_key(name) is not None:
+                # The name alone selects state injection; an explicit tag
+                # still overrides it.  The annotation is not checked.
+                inject_params.append((name, ann))
+                continue
             if self._is_allowed("logfmt", ann):
                 inject_params.append((name, ann))
                 continue
@@ -464,7 +516,7 @@ class CallbackRegistry:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
         for name, ann in params:
-            value = self._resolve_annotation(ann, ctx)
+            value = self._resolve_annotation(name, ann, ctx)
             if value is _UNRESOLVED:
                 raise RuntimeError(f"no value available for annotation {ann!r}")
             kwargs[name] = value
@@ -472,13 +524,11 @@ class CallbackRegistry:
 
     def _is_allowed(self, kind: str, ann: Any) -> bool:
         bare = self._unwrap_optional(ann)
-        if self._matches_state_annotation(bare, "pre"):
-            return kind == "logfmt"
-        if self._matches_state_annotation(bare, "post"):
+        if _state_tag(bare) is not None:
             return kind == "logfmt"
         if bare is DatabaseError:
             return kind == "fatal_error"
-        if bare is MigrationResult:
+        if bare is MigrationReport:
             return kind == "logmigr"
         if self._data_type is not None and bare is self._data_type:
             return kind == "bootstrap"
@@ -502,22 +552,25 @@ class CallbackRegistry:
         if kind == "fatal_error":
             parts.append("DatabaseError")
         if kind == "logmigr":
-            parts.append("MigrationResult")
+            parts.append("MigrationReport")
         if kind == "logfmt":
-            parts.append("Annotated[dict, 'pre']")
-            parts.append("Annotated[dict, 'post']")
+            parts.append("prev: dict")
+            parts.append("state: dict")
         return ", ".join(parts) if parts else "none"
 
-    def _resolve_annotation(self, ann: Any, ctx: InjectionContext) -> Any:
+    def _resolve_annotation(self, name: str, ann: Any, ctx: InjectionContext) -> Any:
         bare = self._unwrap_optional(ann)
-        if self._matches_state_annotation(bare, "pre"):
-            return ctx.previous_state
-        if self._matches_state_annotation(bare, "post"):
-            return ctx.current_state
+        # An explicit tag takes precedence over the parameter name.
+        tag = _state_tag(bare)
+        if tag is not None:
+            return getattr(ctx, _STATE_KINDS[tag])
+        key = _state_key(name)
+        if key is not None:
+            return getattr(ctx, _STATE_KINDS[key])
         if bare is DatabaseError:
             return ctx.error
-        if bare is MigrationResult:
-            return ctx.migration_result
+        if bare is MigrationReport:
+            return ctx.report
         if self._data_type is not None and bare is self._data_type:
             return ctx.data
         if self._kanta_class is not None and bare is self._kanta_class:
@@ -538,16 +591,6 @@ class CallbackRegistry:
                     f"{callback.__name__}: {exc}"
                 ) from exc
         return raw_ann
-
-    @staticmethod
-    def _matches_state_annotation(ann: Any, marker: str) -> bool:
-        origin = get_origin(ann)
-        if origin is not Annotated:
-            return False
-        args = get_args(ann)
-        if not args:
-            return False
-        return args[0] is dict and marker in args[1:]
 
     @staticmethod
     def _unwrap_optional(ann: Any) -> Any:
