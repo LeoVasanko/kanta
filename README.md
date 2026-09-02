@@ -51,100 +51,14 @@ asyncio.run(main())
 3. Let Kanta flush queued changes to disk in the background.
 4. Use snapshots and replay for fast startup and full history.
 
-## Bootstrap and Open Modes
+## Documentation
 
-When `open()` creates a brand-new database, it always writes a single bootstrap
-change record from the initial data object you passed to `Kanta(...)`. The
-simplest bootstrap is therefore the object itself — no extra code is required.
+- [Usage patterns](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/usage.md) — opening, data ownership, and lifecycle patterns
+- [Bootstrap and open modes](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/bootstrap.md) — seeding new databases, strict and read-only opens
+- [Validation](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/validation.md) — `@kanta.validate` integrity checks on open and transactions
+- [Migrations](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/migrations.md) — versioned schema evolution with `migrate_vN`
+- [Retention and rotation](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/rotation.md) — bounding history to a time window
+- [Fatal error handlers](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/fatal-errors.md) — observing background write failures
+- [On-disk format](https://git.zi.fi/LeoVasanko/kanta/src/branch/main/docs/database.md) — record layout and invariants
 
-Bootstrap handlers are optional. Use them only when you need to modify the
-initial state at creation time, for example to seed defaults or perform
-expensive/external setup that should happen exactly once:
-
-```python
-kanta = Kanta("data.kantadb", Data())
-
-@kanta.bootstrap(action="seed", user="system")
-def seed_defaults(data) -> None:
-    data.users["admin"] = User(name="Admin")
-
-await kanta.open()
-```
-
-You can also use `@kanta.bootstrap` with no arguments and async handlers:
-
-```python
-@kanta.bootstrap
-async def bootstrap_async(data) -> None:
-    data.counter = 1
-```
-
-Whether or not handlers are registered, exactly one bootstrap change record is
-written when a new database is created. The record contains the initial object,
-or the state after all bootstrap handlers have run. When handlers are present:
-- they run in registration order,
-- bootstrap metadata (`action`, `user`, `mtime`) is taken from the last
-  registration.
-
-If any bootstrap handler raises, Kanta closes and removes the database file,
-then re-raises the error.
-
-`open()` also supports strict open mode:
-
-```python
-await kanta.open(create=False)
-```
-
-With `create=False`, open fails if the database file does not exist or is
-empty.
-
-Read-only mode opens an existing database without locking it or starting the
-background flush task. This is useful for readers that must not block the
-writer or modify the file:
-
-```python
-await kanta.open(readonly=True)
-```
-
-In read-only mode, records are replayed and migrations are applied in memory,
-but transactions and explicit flushes are rejected and the file is never
-created if missing.
-
-## Fatal Error Handlers
-
-Fatal background write errors can be observed with a decorator:
-
-```python
-import os
-import signal
-
-@kanta.fatal_error
-async def on_fatal(err):
-    os.kill(os.getpid(), signal.SIGTERM)  # Die
-```
-
-Multiple fatal handlers are supported and run in registration order.
-
-## Migrations
-
-Adding or removing a field and other such simple operations are automatic, but when the time comes to really change your data model, implement a `migrate_v1` function that converts your old data to the new form. This works on plain built-in dict and other types, to avoid needing to preserve old versions of your structs.
-
-Pass a module (or import path) containing `migrate_vN` functions:
-
-```python
-kanta = Kanta("data.kantadb", Data(), migrations="myapp.migrations")
-await kanta.open()
-```
-
-Kanta tracks migration version metadata automatically, and fast forwards your database to current version by running all the migrations needed while opening the database.
-
-## On-Disk Format
-
-Kanta in JSON mode (default) stores newline-delimited records. Transaction history is viewable by any simple text editor, and rollbacks to prior state are done by simply removing final lines (one per transaction)
-
-MsgPack mode uses binary records with length and checksum to avoid data corruption.
-
-- Change line: JSON object with metadata + `diff`
-- Snapshot line: `SNAPSHOT { ... full state ... }`
-
-See `docs/database.md` for format details and invariants.
+Kanta in JSON mode (default) stores newline-delimited records, so transaction history is viewable in any text editor; MsgPack mode uses binary records with length and checksum to guard against corruption.
