@@ -47,7 +47,7 @@ async def test_new_file_writes_bootstrap_record_without_handlers(
     records = read_changes(path, format_config)
     assert len(records) == 1
     assert records[0].a == "bootstrap"
-    assert records[0].diff == {"$replace": {"users": {}, "counter": 0}}
+    assert records[0].diff == {"users": {}, "counter": 0}
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,8 @@ async def test_new_file_persists_initial_state_for_roundtrip(tmp_path, format_co
     assert len(records) == 1
     assert records[0].a == "bootstrap"
     assert records[0].diff == {
-        "$replace": {"users": {"alice": {"name": "Alice", "age": 0}}, "counter": 5}
+        "users": {"alice": {"name": "Alice", "age": 0}},
+        "counter": 5,
     }
 
     kanta2 = make_kanta(path, Data, format_config)

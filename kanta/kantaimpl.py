@@ -6,7 +6,7 @@ import asyncio
 import copy
 import importlib
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Generic, TypeVar
 
@@ -21,6 +21,7 @@ from kanta.logging import (
 )
 from kanta.migrations import MigrationReport, Migrations
 from kanta.persistence import PersistenceMixin
+from kanta.rotation import execute_rotation, plan_rotation
 from kanta.serialization import restore_data_in_place, struct_to_dict
 from kanta.serialization.base import replay
 
@@ -42,6 +43,10 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         self.data: T = kwargs.pop("data")
         self._kanta = kwargs.pop("kanta", None)
         migrations = kwargs.pop("migrations", None)
+        retention = kwargs.pop("retention", None)
+        if isinstance(retention, int) and not isinstance(retention, bool):
+            retention = timedelta(days=retention)
+        self.retention: timedelta | None = retention
         self.ctx = SimpleNamespace()
         super().__init__(**kwargs)
         self.migrations: Migrations | None = None
@@ -180,6 +185,9 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         # From this point the file is open and must be closed via close().
         self.opened = True
+
+        if content and self.retention is not None and not readonly:
+            content = await self._maybe_rotate(content, log)
 
         if content:
             try:
@@ -374,6 +382,30 @@ class KantaImpl(PersistenceMixin, Generic[T]):
 
         if not self.readonly:
             self.background_task = asyncio.create_task(self._background_loop())
+
+    async def _maybe_rotate(self, content: bytes, log: bool | logging.Logger) -> bytes:
+        """Rotate history older than the retention window (see docs/rotation.md).
+
+        Runs while the file is locked and quiescent, before replay. Returns
+        the (possibly replaced) content to replay. Rotation failures abort the
+        open with the original file intact.
+        """
+        cutoff = self.now() - self.retention
+        plan = await asyncio.to_thread(
+            plan_rotation,
+            content,
+            framer=self.framer,
+            serializer=self.serializer,
+            cutoff=cutoff,
+            now=self.now(),
+            min_diffs=self.snapshot.min_diffs,
+        )
+        if plan is None:
+            return content
+        await asyncio.to_thread(
+            execute_rotation, self.filename, self.file, plan, log=log
+        )
+        return plan.new_content
 
     async def close(self) -> None:
         """Stop the background task, flush pending changes, and release the file lock."""

@@ -35,6 +35,11 @@ class SnapshotState:
         """Force snapshot write on next check."""
         self._force_pending = True
 
+    @property
+    def min_diffs(self) -> int:
+        """Minimum accumulated changes before a snapshot may be written."""
+        return self._min_diffs
+
     def record_changes(self, count: int) -> None:
         self.changes += count
 

@@ -183,7 +183,7 @@ def test_apply_returns_change_information():
     assert result.migrations[0].name == "migrate_v1"
     assert result.migrations[0].description == "Set x"
     assert result.migrations[0].changed is True
-    assert result.migrations[0].diff == {"$replace": {"x": 1}}
+    assert result.migrations[0].diff == {"x": 1}
 
     assert result.migrations[1].name == "migrate_v2"
     assert result.migrations[1].description == "No-op"

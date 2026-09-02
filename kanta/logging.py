@@ -15,6 +15,7 @@ from typing import Any
 
 import msgspec
 
+from kanta.serialization.base import _apply, unmarshal
 from kanta.tty import Line, displaywidth
 
 transaction_logger = logging.getLogger("kanta.transaction")
@@ -312,6 +313,13 @@ def _collect_changes(
         changes.append(("update" if existed else "add", path, diff))
         return
 
+    old_at_path = _get_nested(previous, path)
+    if isinstance(old_at_path, list):
+        # List edits ($insert/$delete/per-index) are shown as one whole-list
+        # update; the diff is already unmarshaled at this point.
+        changes.append(("update", path, _apply(old_at_path, diff)))
+        return
+
     for key, value in diff.items():
         if key == "$delete":
             if isinstance(value, list):
@@ -340,7 +348,14 @@ def _collect_changes(
                     ("update" if old_collection is not None else "add", path, value)
                 )
         elif isinstance(key, str) and key.startswith("$"):
-            changes.append(("add", path, {key: value}))
+            # Unknown $-command or (post-unmarshal) a user key starting with
+            # "$": treat as a normal key.
+            new_path = path + [str(key)]
+            existed = _get_nested(previous, new_path) is not None
+            if existed:
+                _collect_changes(value, new_path, changes, previous)
+            else:
+                changes.append(("add", new_path, value))
         else:
             new_path = path + [str(key)]
             existed = _get_nested(previous, new_path) is not None
@@ -418,7 +433,7 @@ def format_diff(
     Returns a list of formatted lines (without newlines).
     """
     changes: list[tuple[str, list[str], Any]] = []
-    _collect_changes(diff, [], changes, previous)
+    _collect_changes(unmarshal(diff), [], changes, previous)
     if not changes:
         return []
     lines = []

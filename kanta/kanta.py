@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, Generic, TypeVar
@@ -53,6 +53,7 @@ class Kanta(Generic[T]):
         migrations: ModuleType | str | None = None,
         serializer: Serializer | None = None,
         flush_interval: float = 0.1,
+        retention: timedelta | int | None = None,
     ):
         """Initialize a Kanta persistence instance.
 
@@ -63,6 +64,13 @@ class Kanta(Generic[T]):
             migrations: Optional migrations module object or import path.
             flush_interval: Background flush interval in seconds.
             serializer: Optional serializer implementation.
+            retention: Optional history retention window, either a
+                :class:`~datetime.timedelta` or a plain number of days. When
+                set, opening the database rotates it: history older than
+                ``now - retention`` is moved to a ``{stem}@{timestamp}.kantadb``
+                sibling file and the main file is rewritten with a fresh
+                snapshot plus the retained records (see ``docs/rotation.md``).
+                ``None`` (default) disables rotation.
 
         Raises:
             ImportError: If ``migrations`` is a string path that cannot be imported.
@@ -78,6 +86,7 @@ class Kanta(Generic[T]):
             type=data_type,
             migrations=migrations,
             flush_interval=flush_interval,
+            retention=retention,
             kanta=self,
         )
 

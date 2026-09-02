@@ -1,63 +1,66 @@
-"""Diff computation and replay utilities."""
+"""Diff computation and replay utilities.
 
-import jsondiff
+Diff format: JSON-serializable dicts where ``$delete`` is the only command
+our producer emits; added keys and changed values (scalars, lists, type
+changes — lists always wholesale) are plain assignments. A dict value
+assigned over a non-dict needs no ``$replace``: the consumer can see from
+the old value whether to patch (old is a dict) or replace. User keys
+starting with ``$`` are escaped by prepending another ``$``
+(``$foo`` -> ``$$foo``); values are stored verbatim.
+
+The consumer additionally stays compatible with jsondiff's marshaled
+syntax, so it can replay diffs produced by jsondiff itself: ``$replace``,
+positional ``$insert``/``$delete`` and per-index nested diffs on lists,
+and jsondiff's escaping of ``$``-prefixed values.
+"""
 
 from kanta.structs import ChangeRecord
-from kanta.serialization.base import ReplayResult, replay
+from kanta.serialization.base import ReplayResult, apply_diff, replay
 from kanta.serialization.framing import LineFramer
 from kanta.serialization.json import JsonSerializer
 
+_UNCHANGED = object()
+
+
+def _escape_key(key: str) -> str:
+    """Escape a user key for use as a diff key (``$foo`` -> ``$$foo``)."""
+    if isinstance(key, str) and key.startswith("$"):
+        return "$" + key
+    return key
+
+
+def _diff(previous, current):
+    """Compute a raw diff, or _UNCHANGED if there is no difference."""
+    if isinstance(previous, dict) and isinstance(current, dict):
+        result = {}
+        deleted = [_escape_key(k) for k in previous if k not in current]
+        if deleted:
+            result["$delete"] = deleted
+        for key, new_value in current.items():
+            if key not in previous:
+                result[_escape_key(key)] = new_value
+            else:
+                sub = _diff(previous[key], new_value)
+                if sub is not _UNCHANGED:
+                    result[_escape_key(key)] = sub
+        return result if result else _UNCHANGED
+    if previous == current:
+        return _UNCHANGED
+    return current
+
 
 def compute_diff(previous: dict, current: dict) -> dict | None:
-    """Compute a jsondiff patch between two dicts.
+    """Compute a marshaled diff between two state dicts.
 
     Returns None if there is no difference.
     """
-    return jsondiff.diff(previous, current, marshal=True) or None
-
-
-def _apply_diff(state: dict, diff: dict) -> dict:
-    """Apply a jsondiff patch manually, handling ``$replace`` and ``$delete``.
-
-    jsondiff.patch does not handle nested ``$replace`` commands when the
-    parent key is missing from the state.  This function recursively applies
-    diffs, treating ``$replace`` as full replacement and ``$delete`` as
-    key removal.
-    """
-    if not isinstance(diff, dict):
-        return diff
-
-    result = dict(state) if isinstance(state, dict) else state
-    if not isinstance(result, dict):
-        result = {}
-
-    for key, value in diff.items():
-        if key == "$replace":
-            return value
-        elif key == "$delete":
-            if isinstance(value, list):
-                for k in value:
-                    result.pop(k, None)
-            else:
-                result.pop(value, None)
-        elif isinstance(value, dict):
-            old = result.get(key, {})
-            if not isinstance(old, dict):
-                old = {}
-            result[key] = _apply_diff(old, value)
-        else:
-            result[key] = value
-
-    return result
+    diff = _diff(previous, current)
+    return diff if diff is not _UNCHANGED else None
 
 
 def patch_state(state: dict, diff: dict) -> dict:
-    """Apply a jsondiff patch to a state dict.
-
-    The diff was produced with ``marshal=True`` (string keys like
-    ``"$replace"`` and ``"$delete"``) and decoded from JSON.
-    """
-    return _apply_diff(state, diff)
+    """Apply a marshaled diff to a state dict."""
+    return apply_diff(state, diff)
 
 
 # Backward-compatible JSONL replay using the default serializer.

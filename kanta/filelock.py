@@ -83,6 +83,10 @@ if sys.platform == "win32":
     ]
     _kernel32.CloseHandle.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.SetEndOfFile.restype = wintypes.BOOL
+    _kernel32.SetEndOfFile.argtypes = [wintypes.HANDLE]
+    _kernel32.FlushFileBuffers.restype = wintypes.BOOL
+    _kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
 
     def _is_invalid_handle(handle) -> bool:
         return ctypes.c_void_p(handle).value == ctypes.c_void_p(-1).value
@@ -177,6 +181,22 @@ class LockedFile:
         os.lseek(self._fd, current, os.SEEK_SET)
         return end
 
+    def replace_content(self, data: bytes) -> None:
+        """Atomically-ish rewrite the file's content in place, lock retained.
+
+        Seeks to the start, truncates, writes *data* and fsyncs, all on the
+        already-locked descriptor. The path is never unlinked or renamed, so
+        no other process can observe a missing file or acquire its own lock.
+        Used by database rotation.
+        """
+        if self._fd is None:
+            raise RuntimeError("LockedFile.replace_content() called on a closed file")
+
+        if sys.platform == "win32":
+            self._replace_content_win32(data)
+        else:
+            self._replace_content_unix(data)
+
     def close(self) -> None:
         """Release the lock and close the file."""
         if self._fd is None:
@@ -226,6 +246,15 @@ class LockedFile:
     def _write_unix(self, data: bytes) -> None:
         os.lseek(self._fd, 0, os.SEEK_END)
         os.write(self._fd, data)
+
+    def _replace_content_unix(self, data: bytes) -> None:
+        os.lseek(self._fd, 0, os.SEEK_SET)
+        os.ftruncate(self._fd, 0)
+        view = memoryview(data)
+        while view:
+            written = os.write(self._fd, view)
+            view = view[written:]
+        os.fdatasync(self._fd)
 
     # -- Windows -------------------------------------------------------------
 
@@ -288,3 +317,24 @@ class LockedFile:
         )
         if not ok:
             raise OSError(f"WriteFile failed: Windows error {ctypes.get_last_error()}")
+
+    def _replace_content_win32(self, data: bytes) -> None:
+        _kernel32.SetFilePointer(self._fd, 0, None, _FILE_BEGIN)
+        written = wintypes.DWORD()
+        ok = _kernel32.WriteFile(
+            self._fd,
+            data,
+            len(data),
+            ctypes.byref(written),
+            None,
+        )
+        if not ok:
+            raise OSError(f"WriteFile failed: Windows error {ctypes.get_last_error()}")
+        if not _kernel32.SetEndOfFile(self._fd):
+            raise OSError(
+                f"SetEndOfFile failed: Windows error {ctypes.get_last_error()}"
+            )
+        if not _kernel32.FlushFileBuffers(self._fd):
+            raise OSError(
+                f"FlushFileBuffers failed: Windows error {ctypes.get_last_error()}"
+            )

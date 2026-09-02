@@ -121,33 +121,100 @@ def replay(
 
 
 def _patch_state(state: dict, diff: dict) -> dict:
-    return _apply_diff(state, diff)
+    return apply_diff(state, diff)
 
 
-def _apply_diff(state: dict, diff: dict) -> dict:
+def _unescape(value: str) -> str:
+    """Reverse jsondiff's ``$$`` escaping; command strings pass through.
+
+    Only a ``$$`` prefix is stripped: jsondiff escapes ``$x`` to ``$$x``,
+    while single ``$`` strings occur verbatim in our own diffs (we do not
+    escape values) and must be left alone.
+    """
+    if value.startswith("$$"):
+        return value[1:]
+    return value
+
+
+def unmarshal(diff: Any) -> Any:
+    """Unescape a marshaled diff (keys, values and ``$delete`` entries).
+
+    Needed for jsondiff-produced diffs, which escape ``$``-prefixed values
+    as well as keys; our own producer escapes keys only, so unescaping
+    values is a no-op for them.
+    """
+    if isinstance(diff, dict):
+        return {
+            _unescape(k) if isinstance(k, str) else k: unmarshal(v)
+            for k, v in diff.items()
+        }
+    if isinstance(diff, list):
+        return [unmarshal(v) for v in diff]
+    if isinstance(diff, str):
+        return _unescape(diff)
+    return diff
+
+
+def apply_diff(state: Any, diff: Any) -> Any:
+    """Apply a diff.
+
+    Understands our own format (plain assignment + ``$delete``) and
+    jsondiff's marshaled syntax: ``$replace``, positional
+    ``$delete``/``$insert`` and per-index nested diffs on lists. A bare
+    dict over a non-dict old value is a wholesale replacement.
+    """
+    return _apply(state, unmarshal(diff))
+
+
+def _is_list_patch(diff: dict) -> bool:
+    """Whether a dict diff against a list state is a jsondiff list edit."""
+    for key in diff:
+        if key in ("$delete", "$insert"):
+            continue
+        try:
+            int(key)
+        except (ValueError, TypeError):
+            return False
+    return True
+
+
+def _apply(state: Any, diff: Any) -> Any:
     if not isinstance(diff, dict):
         return diff
+    if not diff:
+        return state
+    if "$replace" in diff:
+        return diff["$replace"]
 
-    result = dict(state) if isinstance(state, dict) else state
-    if not isinstance(result, dict):
-        result = {}
+    if isinstance(state, list):
+        if not _is_list_patch(diff):
+            # Our own producer replaces a list with a dict (or any other
+            # type) by plain assignment — no $replace wrapper.
+            return diff
+        result = list(state)
+        deletes = diff.get("$delete")
+        if deletes:
+            for pos in deletes:
+                result.pop(pos)
+        for pos, value in diff.get("$insert", []):
+            result.insert(pos, value)
+        for key, value in diff.items():
+            if key in ("$delete", "$insert"):
+                continue
+            pos = int(key)
+            result[pos] = _apply(result[pos], value)
+        return result
 
+    result = dict(state) if isinstance(state, dict) else {}
     for key, value in diff.items():
-        if key == "$replace":
-            return value
         if key == "$delete":
-            if isinstance(value, list):
-                for k in value:
-                    result.pop(k, None)
-            else:
-                result.pop(value, None)
+            keys = value if isinstance(value, list) else [value]
+            for k in keys:
+                result.pop(k, None)
+        elif key == "$insert":
             continue
-        if isinstance(value, dict):
-            old = result.get(key, {})
-            if not isinstance(old, dict):
-                old = {}
-            result[key] = _apply_diff(old, value)
-            continue
-        result[key] = value
-
+        elif key in result:
+            result[key] = _apply(result[key], value)
+        else:
+            result[key] = value
     return result
