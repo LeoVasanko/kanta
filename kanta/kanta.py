@@ -249,6 +249,27 @@ class Kanta(Generic[T]):
             return _register
         return _register(fn)
 
+    def validate(self, fn):
+        """Register a data validation callback.
+
+        Used as ``@kanta.validate``. The callback receives the live data
+        object (and optionally the ``Kanta`` instance) and must raise an
+        exception when the data is inconsistent. Validators run after replay
+        during :meth:`open` (after msgspec decoding and migrations) and after
+        each transaction, before the change is committed to history. Multiple
+        validators run in registration order until the first failure.
+
+        Validators must be synchronous and must not modify the data — they
+        only fail. A failure inside a transaction rolls the transaction back;
+        a failure during open aborts the open.
+        """
+
+        def _register(callback):
+            self._impl.add_validate(callback)
+            return callback
+
+        return _register(fn)
+
     def fatal_error(self, fn=None):
         """Register fatal error handler callback.
 

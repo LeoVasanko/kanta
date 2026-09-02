@@ -88,6 +88,11 @@ def transaction(
         new_dict = struct_to_dict(impl.data, serializer=impl.serializer)
         diff = compute_diff(impl.statedict, new_dict)
         if diff:
+            if impl.callback_registry.has("validate"):
+                impl.callback_registry.invoke_sync(
+                    "validate",
+                    InjectionContext(data=impl.data, kanta=impl._kanta),
+                )
             previous = impl.statedict
             record = impl.queue_change(action, new_dict, user=user, mtime=mtime)
             if record is not None:

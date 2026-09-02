@@ -136,6 +136,7 @@ class CallbackRegistry:
             "bootstrap": [],
             "fatal_error": [],
             "logmigr": [],
+            "validate": [],
         }
         self._logfmt_callbacks: list[_LogFmtFunctionSpec | _LogFmtClassSpec] = []
         self._logemit_callbacks: list[Callable[..., Any]] = []
@@ -174,6 +175,10 @@ class CallbackRegistry:
             raise TypeError(f"{kind} callbacks must be functions, not classes")
         if not callable(callback):
             raise TypeError(f"{kind} callback must be callable")
+        if kind == "validate" and inspect.iscoroutinefunction(callback):
+            raise TypeError(
+                "validate callbacks must not be async (transactions are synchronous)"
+            )
 
         params = self._validate_function(callback, kind)
         is_async = inspect.iscoroutinefunction(callback)
@@ -214,6 +219,16 @@ class CallbackRegistry:
                 if on_error(exc, reg.callback) is False:
                     break
         return results
+
+    def invoke_sync(self, kind: str, ctx: InjectionContext) -> None:
+        """Invoke all sync callbacks of *kind* in order; first exception raises.
+
+        Used for ``validate`` callbacks, which run inside synchronous
+        transactions and therefore must not be async.
+        """
+        for reg in self._callbacks[kind]:
+            kwargs = self._build_kwargs(reg.params, ctx)
+            reg.callback(**kwargs)
 
     def has(self, kind: str) -> bool:
         """Return True if any callback of *kind* is registered."""
@@ -531,22 +546,23 @@ class CallbackRegistry:
         if bare is MigrationReport:
             return kind == "logmigr"
         if self._data_type is not None and bare is self._data_type:
-            return kind == "bootstrap"
+            return kind in {"bootstrap", "validate"}
         if self._kanta_class is not None and bare is self._kanta_class:
             return kind in {
                 "bootstrap",
                 "fatal_error",
                 "logfmt",
                 "logmigr",
+                "validate",
             }
         return False
 
     def _allowed_message(self, kind: str) -> str:
         parts: list[str] = []
-        if kind == "bootstrap":
+        if kind in {"bootstrap", "validate"}:
             if self._data_type is not None:
                 parts.append(self._data_type.__name__)
-        if kind in {"bootstrap", "fatal_error", "logfmt", "logmigr"}:
+        if kind in {"bootstrap", "fatal_error", "logfmt", "logmigr", "validate"}:
             if self._kanta_class is not None:
                 parts.append(self._kanta_class.__name__)
         if kind == "fatal_error":

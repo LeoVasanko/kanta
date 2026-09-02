@@ -96,6 +96,10 @@ class KantaImpl(PersistenceMixin, Generic[T]):
         """Register one migration logging callback."""
         self.callback_registry.register("logmigr", callback)
 
+    def add_validate(self, callback) -> None:
+        """Register one data validation callback."""
+        self.callback_registry.register("validate", callback)
+
     def add_logemit(self, callback) -> None:
         """Register one log emitter callback."""
         self.callback_registry.register("logemit", callback)
@@ -247,6 +251,16 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 self.data_type,
                 serializer=self.serializer,
             )
+            if self.callback_registry.has("validate"):
+                try:
+                    self.callback_registry.invoke_sync(
+                        "validate",
+                        InjectionContext(data=self.data, kanta=self._kanta),
+                    )
+                except Exception:
+                    self.opened = False
+                    self.file.close()
+                    raise
             self.version = rr.version
             self.mtime = rr.m
             if log is not False and not migrations_ran:
@@ -319,6 +333,12 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                 if self.callback_registry.has("bootstrap"):
                     await self.callback_registry.invoke(
                         "bootstrap",
+                        InjectionContext(data=self.data, kanta=self._kanta),
+                    )
+
+                if self.callback_registry.has("validate"):
+                    self.callback_registry.invoke_sync(
+                        "validate",
                         InjectionContext(data=self.data, kanta=self._kanta),
                     )
 
