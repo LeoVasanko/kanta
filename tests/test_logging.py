@@ -71,7 +71,9 @@ def test_log_change_no_diff(capsys):
     assert "test" in captured.err
 
 
-def test_log_change_appends_extra_string(capsys):
+def test_log_change_appends_extra_string(capsys, monkeypatch):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
     kanta_logger = logging.getLogger("kanta")
     kanta_logger.handlers.clear()
     configure_logging()

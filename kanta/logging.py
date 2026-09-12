@@ -5,6 +5,8 @@ through :func:`emit_event`, which runs any registered ``logemit`` callbacks
 and falls back to :func:`default_emit` for the built-in formatting.  Diff
 output is formatted in a human-readable path notation style with color
 coding; see :mod:`kanta.tty` for the color palette and line builder.
+ANSI codes are stripped at emit time when the standard error stream does
+not support color (``NO_COLOR``/``FORCE_COLOR``, tty and journald checks).
 """
 
 import logging
@@ -16,7 +18,7 @@ from typing import Any
 import msgspec
 
 from kanta.serialization.base import _apply, unmarshal
-from kanta.tty import Line, displaywidth
+from kanta.tty import Line, displaywidth, strip_ansi, use_color
 
 transaction_logger = logging.getLogger("kanta.transaction")
 bootstrap_logger = logging.getLogger("kanta.bootstrap")
@@ -155,6 +157,11 @@ def emit_event(
         _logger.exception("failed to emit %s log event", ev.kind)
 
 
+def _maybe_strip(text: str) -> str:
+    """Strip ANSI codes from *text* when stderr has no color support."""
+    return text if use_color() else strip_ansi(text)
+
+
 def default_emit(ev: LogEvent) -> None:
     """Emit *ev* with Kanta's built-in formatting.
 
@@ -163,25 +170,28 @@ def default_emit(ev: LogEvent) -> None:
     logger so it can be silenced or routed separately from the headers.
     This is what runs when no logemit callback handles the event; custom
     callbacks may call it to delegate events they do not care about.
+
+    ANSI color codes are stripped after formatting when the standard error
+    stream does not support color (see :func:`kanta.tty.use_color`).
     """
     if ev.kind != "change":
-        ev.logger.log(ev.level, ev.header)
+        ev.logger.log(ev.level, _maybe_strip(ev.header))
         return
 
     diff_logger = logging.getLogger(f"{ev.logger.name}.diff")
     lines = ev.diff_lines if ev.show_diff and diff_logger.isEnabledFor(ev.level) else []
 
     if not lines:
-        ev.logger.log(ev.level, ev.header)
+        ev.logger.log(ev.level, _maybe_strip(ev.header))
         return
 
     if len(lines) == 1:
-        diff_logger.log(ev.level, f"{ev.header}{lines[0]}")
+        diff_logger.log(ev.level, _maybe_strip(f"{ev.header}{lines[0]}"))
         return
 
-    ev.logger.log(ev.level, ev.header)
+    ev.logger.log(ev.level, _maybe_strip(ev.header))
     for line in lines:
-        diff_logger.log(ev.level, line)
+        diff_logger.log(ev.level, _maybe_strip(line))
 
 
 def _join_path(path: str, key: str) -> str:

@@ -171,7 +171,7 @@ def resolve_user_key(value: str) -> str | None:
 
 #### Transaction Log Headers
 
-- By default a transaction is logged with an `action by user` header followed by the diff lines. Added paths are colored green, deleted paths red.
+- By default a transaction is logged with an `action by user` header followed by the diff lines. Added paths are colored green, deleted paths red. ANSI color codes are stripped after formatting when the standard error stream does not support color: `NO_COLOR` disables colors, `FORCE_COLOR` forces them, otherwise a tty check and a journald (`JOURNAL_STREAM`) check decide. The CLI (`python -m kanta`) strips its output the same way.
 - `kanta.transaction(..., extra=...)` accepts a display-only value that is shown after the action in the header. Anything other than `None` is printed str-converted (colored by Kanta), unless a custom logemit handler does something else with it; it is never persisted in the `ChangeRecord`.
 - `kanta.transaction(..., logdiff=False)` skips building and printing the diff body and logs only the header, which is useful for large or noisy changesets. Diff output can also be disabled globally with `configure_logging(diff=False)`; diff lines are emitted on the `kanta.transaction.diff` child logger so applications can route or silence them separately from the headers.
 
@@ -203,6 +203,7 @@ def emit(ev: LogEvent):
   - `colors`: the mutable color palette. Colors are bare SGR parameter strings (e.g. `"1;34"`, `"38;5;226"`) without escape framing. Attributes are read at render time, so assignments (`colors.action = "36"`) and additions (`colors.session = "38;5;226"`) take effect immediately.
   - `Line`: builds a terminal string part by part. Calling it appends content (`str`-converted); `.<colorname>` arms a palette color for the next call only, and the reset is folded into a single escape sequence with whatever color comes next. `width=`/`align=` pad by display width; `str(line)` finishes the line and restores default colors.
   - `strip_ansi`, `displaywidth` (wide chars and emoji count correctly) and `pad` for working with pre-colored strings.
+  - `use_color(stream)`: the color-support test used by Kanta's own output — honors `NO_COLOR`/`FORCE_COLOR`, then `stream.isatty()`, then the journald `JOURNAL_STREAM` device/inode match.
 
 ## Migrations
 

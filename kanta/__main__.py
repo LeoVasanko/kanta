@@ -33,7 +33,7 @@ from kanta.replaylog import (
 )
 from kanta.serialization import Serializer, dict_to_struct, struct_to_dict
 from kanta.structs import ChangeRecord, Snapshot
-from kanta.tty import Line
+from kanta.tty import Line, strip_ansi, use_color
 
 EXIT_SUCCESS = 0
 EXIT_GENERIC = 1
@@ -43,6 +43,19 @@ EXIT_MIGRATION_ERROR = 20
 EXIT_VALIDATION_ERROR = 21
 
 _logger = logging.getLogger(__name__)
+
+
+def _print(*args: Any) -> None:
+    """Print to stderr, stripping ANSI codes when the stream has no color support.
+
+    Color detection runs per call so redirected or reassigned ``sys.stderr``
+    (and environment changes) are honored; ANSI codes are stripped after
+    formatting, not by formatting differently.
+    """
+    text = " ".join(str(arg) for arg in args)
+    if not use_color():
+        text = strip_ansi(text)
+    print(text, file=sys.stderr)
 
 
 class _CliError(Exception):
@@ -234,14 +247,14 @@ def _print_change_log(
         ts = _format_ts(record.ts)
         lines = ev.diff_lines
         if not lines:
-            print(f"{label} {ts} {ev.header}", file=sys.stderr)
+            _print(f"{label} {ts} {ev.header}")
         elif len(lines) == 1:
-            print(f"{label} {ts} {ev.header}{lines[0]}", file=sys.stderr)
+            _print(f"{label} {ts} {ev.header}{lines[0]}")
         else:
-            print(f"{label} {ts} {ev.header}", file=sys.stderr)
+            _print(f"{label} {ts} {ev.header}")
             for line in lines:
-                print(line, file=sys.stderr)
-            print(file=sys.stderr)
+                _print(line)
+            _print()
 
     emit_event(
         event,
@@ -319,7 +332,7 @@ def _print_snapshot_indicator(
         line.target(f" {_format_ts(snap.m)}")
     size = len(serializer.encode(snap.state))
     line.path_prefix(f" {_format_size(size)}")
-    print(f"{label} {ts} {line}", file=sys.stderr)
+    _print(f"{label} {ts} {line}")
 
 
 async def _log_migration(
@@ -359,7 +372,7 @@ async def _log_migration(
             migrations=descriptions,
         ),
         registry.logemit_handlers,
-        fallback=lambda ev: print(ev.header, file=sys.stderr),
+        fallback=lambda ev: _print(ev.header),
     )
 
 
@@ -457,7 +470,7 @@ async def _run(args: argparse.Namespace) -> int:
                     snapshot_line_to_index[snap_event.line_number],
                     kanta._impl.serializer,
                 )
-                print(file=sys.stderr)
+                _print()
         else:
             # Replay up to the range end, printing logs within the range.
             state = {}
@@ -481,7 +494,7 @@ async def _run(args: argparse.Namespace) -> int:
                     _print_change_log(label, event.record, previous, current, kanta)
                 printed = True
             if printed:
-                print(file=sys.stderr)
+                _print()
 
         # Apply optional migrations to the range-end state.
         if kanta._impl.migrations is not None:
@@ -518,7 +531,7 @@ async def _run(args: argparse.Namespace) -> int:
                 # The file was already fully decoded and validated above with
                 # the object's own serializer, and its migrations were applied
                 # to the state; no need to re-open through a new instance.
-                print(f"{data}", file=sys.stderr)
+                _print(f"{data}")
                 output_state = struct_to_dict(data, serializer=kanta._impl.serializer)
             else:
                 kanta_typed = Kanta(
@@ -526,7 +539,7 @@ async def _run(args: argparse.Namespace) -> int:
                 )
                 try:
                     await kanta_typed.open(create=False, readonly=True, log=False)
-                    print(f"{data}", file=sys.stderr)
+                    _print(f"{data}")
                 except (msgspec.ValidationError, msgspec.DecodeError) as exc:
                     raise _CliError(
                         f"Validation error: {exc}", EXIT_VALIDATION_ERROR
@@ -577,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return asyncio.run(_run(args))
     except _CliError as exc:
-        print(exc, file=sys.stderr)
+        _print(exc)
         return exc.code
 
 

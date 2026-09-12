@@ -127,6 +127,25 @@ def test_default_emit_created_and_migrated(capsys):
     assert "🛢️ x.kantadb migrated v0 -> v1: migrate_v1 (rename)" in err
 
 
+def test_default_emit_strips_ansi_without_color_support(capsys, monkeypatch):
+    """NO_COLOR output contains no ANSI codes; FORCE_COLOR keeps them."""
+    logging.getLogger("kanta").handlers.clear()
+    configure_logging()
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    emit_event(_change_event(diff={"counter": 1}))
+    err = capsys.readouterr().err
+    assert "\x1b[" not in err
+    assert "counter" in err
+
+    logging.getLogger("kanta").handlers.clear()
+    configure_logging()
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    emit_event(_change_event(diff={"counter": 1}))
+    assert "\x1b[" in capsys.readouterr().err
+
+
 @pytest.mark.asyncio
 async def test_logemit_receives_transaction_events(tmp_path, format_config):
     path = tmp_path / "test.db"
@@ -242,7 +261,11 @@ async def test_logmigr_failure_does_not_break_open(tmp_path, format_config):
 
 
 @pytest.mark.asyncio
-async def test_aborted_transaction_emits_event(tmp_path, format_config, caplog):
+async def test_aborted_transaction_emits_event(
+    tmp_path, format_config, caplog, monkeypatch
+):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
     path = tmp_path / "test.db"
     kanta = make_kanta(path, Data, format_config)
     events = []

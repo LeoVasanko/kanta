@@ -10,8 +10,12 @@ color instead of emitting a separate one.
 
 from __future__ import annotations
 
+import io
+import os
 import re
+import sys
 import unicodedata
+from contextlib import suppress
 from typing import Any
 
 ESC = "\x1b["
@@ -23,6 +27,21 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;:]*[A-Za-z]")
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from *text*."""
     return ANSI_RE.sub("", text)
+
+
+def use_color(stream: io.TextIOBase = sys.stderr) -> bool:
+    """Test if the stream supports color codes."""
+    if os.environ.get("NO_COLOR"):  # Non empty means no (no-color.org)
+        return False
+    if os.environ.get("FORCE_COLOR", "") not in {"", "0"}:  # force-color.org, node
+        return True
+    if hasattr(stream, "isatty") and stream.isatty():
+        return True
+    with suppress(KeyError, ValueError, OSError):  # Journald does color (-ocat)
+        dev, ino = map(int, os.environ["JOURNAL_STREAM"].split(":", 1))
+        st = os.fstat(stream.fileno())
+        return st.st_dev == dev and st.st_ino == ino
+    return False
 
 
 def displaywidth(text: str) -> int:
