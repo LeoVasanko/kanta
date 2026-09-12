@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import importlib
+import importlib.metadata
 import importlib.util
 import logging
 import sys
@@ -161,10 +162,26 @@ def _format_ts(dt) -> str:
     return dt.replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
 
 
+def _package_version() -> str:
+    """Return the installed package version, or ``"unknown"`` from a source tree."""
+    try:
+        return importlib.metadata.version("kanta")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="kanta",
-        description="Read a kantadb file and print each change record to the console.",
+        description=(
+            f"kanta {_package_version()} - read a kantadb file and print each"
+            " change record to the console."
+        ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
     )
     parser.add_argument(
         "file",

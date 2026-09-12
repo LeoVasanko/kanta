@@ -3,6 +3,8 @@
 import sys
 from datetime import UTC, datetime
 
+import pytest
+
 from kanta.__main__ import (
     _extra_import_paths,
     _format_ts,
@@ -129,6 +131,23 @@ def test_cli_strips_ansi_without_color_support(tmp_path, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "\x1b[" not in err
     assert "snapshot s0" in err
+
+
+def test_cli_version_on_help_and_version_flag(capsys):
+    """--help and --version print the installed package version."""
+    import importlib.metadata
+
+    version = importlib.metadata.version("kanta")
+
+    with pytest.raises(SystemExit) as help_exit:
+        main(["--help"])
+    assert help_exit.value.code == 0
+    assert f"kanta {version}" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as version_exit:
+        main(["--version"])
+    assert version_exit.value.code == 0
+    assert capsys.readouterr().out.strip() == f"kanta {version}"
 
 
 def test_import_dotted_from_file_path(tmp_path):
