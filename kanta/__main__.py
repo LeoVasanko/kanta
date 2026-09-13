@@ -19,7 +19,14 @@ import msgspec
 from kanta import Kanta
 from kanta.callbacks import InjectionContext
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.logging import LogEvent, emit_event, migration_logger
+from kanta.grep import GrepPattern, evaluate
+from kanta.logging import (
+    LogEvent,
+    emit_event,
+    format_action_header,
+    format_diff,
+    migration_logger,
+)
 from kanta.replaylog import (
     RangeNotFoundError,
     Selection,
@@ -239,6 +246,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             " '2:5', '2..5', 'l10:l20', 's1:s3', 'v0:v2', 's-1:', ':-1', '-1'."
         ),
     )
+    parser.add_argument(
+        "-g",
+        "--grep",
+        action="append",
+        metavar="PATTERN",
+        help=(
+            "Print only change records matching PATTERN, structurally and"
+            " case-insensitively; matched regions get a yellow background,"
+            " and on a match the whole record is printed, not just the"
+            " matching line.  Repeatable: every pattern must match somewhere"
+            " in the same record, but different patterns may match different"
+            " lines of it.  A bare pattern matches the action or user as a"
+            " substring, a dotted path by element (each element in full,"
+            " unless it uses wildcards: 'users' matches 'users' anywhere but"
+            " not 'foousers', 'us*' does), or a value (strings by substring,"
+            " other values in full: 'true' matches a boolean, 'tru' does"
+            " not).  The 'path=value' form requires the path and the value"
+            " to match within the same change line; use '=value' or 'path='"
+            " to match values or paths only.  With -k, logfmt-prettified"
+            " values and users match alongside the raw ones.  Examples:"
+            " --grep alice, --grep 'users.*.email', --grep"
+            " 'users.alice.admin=true', --grep create_user --grep"
+            " '@example.com'."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.kanta and (args.data or args.migrations):
         parser.error("-k/--kanta cannot be used together with -d or -m")
@@ -251,24 +283,33 @@ def _print_change_log(
     previous: dict[str, Any],
     current: dict[str, Any],
     kanta: Kanta[Any],
+    highlight: Any = None,
 ) -> None:
     """Log a single change record to stderr.
 
     The record is dispatched as a :class:`LogEvent` through the Kanta
     object's logemit handlers; the CLI's own rendering (with the ``l<N>``
     label and timestamp) is the fallback when no handler claims the event.
+    ``highlight`` is an optional :class:`kanta.grep.GrepHighlighter` with
+    the record's matched regions, applied to the fallback rendering.
     """
     event = record_change_event(record, previous, current, kanta)
 
     def render(ev) -> None:
         ts = _format_ts(record.ts)
-        lines = ev.diff_lines
-        if not lines:
-            _print(f"{label} {ts} {ev.header}")
-        elif len(lines) == 1:
-            _print(f"{label} {ts} {ev.header}{lines[0]}")
+        if highlight is not None:
+            header = format_action_header(
+                ev.action or "", ev.user, ev.extra, highlight=highlight
+            )
+            lines = format_diff(ev.diff, ev.previous, ev.logfmt, highlight=highlight)
         else:
-            _print(f"{label} {ts} {ev.header}")
+            header, lines = ev.header, ev.diff_lines
+        if not lines:
+            _print(f"{label} {ts} {header}")
+        elif len(lines) == 1:
+            _print(f"{label} {ts} {header}{lines[0]}")
+        else:
+            _print(f"{label} {ts} {header}")
             for line in lines:
                 _print(line)
             _print()
@@ -476,6 +517,8 @@ async def _run(args: argparse.Namespace) -> int:
         except ValueError as exc:
             raise _CliError(f"Invalid --range value: {exc}") from exc
 
+        grep_patterns = [GrepPattern.parse(p) for p in args.grep or ()]
+
         if selection.snapshot is not None:
             snap_event = selection.snapshot
             state = snap_event.snap.state
@@ -508,7 +551,25 @@ async def _run(args: argparse.Namespace) -> int:
                     )
                 else:
                     assert previous is not None
-                    _print_change_log(label, event.record, previous, current, kanta)
+                    highlight = None
+                    if grep_patterns:
+                        # Build the same logfmt the rendering uses, so both
+                        # raw and prettified values are matched.
+                        logfmt = kanta._impl.callback_registry.build_logfmt(
+                            InjectionContext(
+                                kanta=kanta,
+                                previous_state=previous,
+                                current_state=current,
+                            )
+                        )
+                        highlight = evaluate(
+                            event.record, previous, grep_patterns, logfmt=logfmt
+                        )
+                        if highlight is None:
+                            continue
+                    _print_change_log(
+                        label, event.record, previous, current, kanta, highlight
+                    )
                 printed = True
             if printed:
                 _print()

@@ -212,56 +212,80 @@ def _format_value(
     *,
     max_len: int = 60,
     logfmt: Callable[[Any, str], str | None] | None = None,
+    highlight: Any = None,
 ) -> str:
-    """Format a value for display, truncating if needed."""
+    """Format a value for display, truncating if needed.
+
+    ``highlight`` is an optional hook with ``path(text, path)`` and
+    ``value(text, path)`` methods (see :class:`kanta.grep.GrepHighlighter`);
+    it wraps matched keys and scalar values, and recurses into containers.
+    """
     if logfmt is not None:
         resolved = logfmt(value, path)
         if resolved is not None:
+            if highlight is not None:
+                resolved = highlight.value(resolved, path)
             return resolved
 
+    def keyed(key: Any, key_path: str) -> str:
+        display = _format_value(key, key_path, max_len=30, logfmt=logfmt)
+        if highlight is not None:
+            display = highlight.path(display, key_path)
+        return display
+
     if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        value = _UNSAFE_CHARS.sub("", value)
-        if len(value) > max_len:
-            return value[: max_len - 1] + _dim_ellipsis()
-        return value
-    if isinstance(value, dict):
+        text = "null"
+    elif isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        text = str(value)
+    elif isinstance(value, str):
+        text = _UNSAFE_CHARS.sub("", value)
+        if len(text) > max_len:
+            text = text[: max_len - 1] + _dim_ellipsis()
+    elif isinstance(value, dict):
         if not value:
             return "{}"
         all_true = all(v is True for v in value.values())
         parts = []
         for k, v in value.items():
             key_path = _join_path(path, str(k))
-            key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
+            key_display = keyed(k, key_path)
             if all_true:
                 parts.append(key_display)
             else:
-                val_display = _format_value(v, key_path, max_len=30, logfmt=logfmt)
+                val_display = _format_value(
+                    v, key_path, max_len=30, logfmt=logfmt, highlight=highlight
+                )
                 parts.append(f"{key_display}: {val_display}")
         return "{" + ", ".join(parts) + "}"
-    if isinstance(value, list):
+    elif isinstance(value, list):
         if not value:
             return "[]"
         parts = []
         for i, v in enumerate(value):
             item_path = _join_path(path, str(i))
-            parts.append(_format_value(v, item_path, max_len=30, logfmt=logfmt))
+            parts.append(
+                _format_value(
+                    v, item_path, max_len=30, logfmt=logfmt, highlight=highlight
+                )
+            )
         return "[" + ", ".join(parts) + "]"
-    text = str(value)
-    if len(text) > max_len:
-        text = text[: max_len - 1] + _dim_ellipsis()
+    else:
+        text = str(value)
+        if len(text) > max_len:
+            text = text[: max_len - 1] + _dim_ellipsis()
+    if highlight is not None:
+        text = highlight.value(text, path)
     return text
 
 
 def _format_path_components(
-    path: list[str], logfmt: Callable[[Any, str], str | None] | None
+    path: list[str],
+    logfmt: Callable[[Any, str], str | None] | None,
+    highlight: Any = None,
 ) -> list[str]:
-    """Return path components after applying formatters."""
+    """Return path components after applying formatters and match highlights."""
     if not path:
         return []
     result = []
@@ -272,6 +296,8 @@ def _format_path_components(
             resolved = logfmt(component, prefix_path)
             if resolved is not None:
                 display = resolved
+        if highlight is not None:
+            display = highlight.path(display, prefix_path)
         result.append(display)
     return result
 
@@ -280,12 +306,13 @@ def _format_path(
     path: list[str],
     logfmt: Callable[[Any, str], str | None] | None,
     final_color: str = "path_final",
+    highlight: Any = None,
 ) -> str:
     """Format a path as dot notation with prefix in dark grey, final colored.
 
     *final_color* names a color in the :data:`kanta.tty.colors` palette.
     """
-    components = _format_path_components(path, logfmt)
+    components = _format_path_components(path, logfmt, highlight)
     if not components:
         return ""
     line = Line()
@@ -380,25 +407,32 @@ def _format_change_lines(
     path: list[str],
     value: Any,
     logfmt: Callable[[Any, str], str | None] | None = None,
+    highlight: Any = None,
 ) -> list[str]:
     """Format a single change as one or more lines."""
     if change_type == "delete":
-        components = _format_path_components(path, logfmt)
+        components = _format_path_components(path, logfmt, highlight)
         line = Line()("  ")
         if len(components) > 1:
             line.path_prefix(".".join(components[:-1]) + ".")
-        line.delete(components[-1], " ✗")
+        marker = "✗"
+        if highlight is not None:
+            marker = highlight.delete(marker, ".".join(path))
+        line.delete(components[-1], " ", marker)
         return [str(line)]
 
     if change_type == "add":
-        path_str = _format_path(path, logfmt, final_color="add")
+        path_str = _format_path(path, logfmt, final_color="add", highlight=highlight)
         if isinstance(value, dict) and value:
             lines = [str(Line()("  ", path_str, " ").sep("="))]
             base_path = ".".join(path)
             keys = []
             for k in value:
                 key_path = _join_path(base_path, str(k))
-                keys.append((k, _format_value(k, key_path, max_len=30, logfmt=logfmt)))
+                key_display = _format_value(k, key_path, max_len=30, logfmt=logfmt)
+                if highlight is not None:
+                    key_display = highlight.path(key_display, key_path)
+                keys.append((k, key_display))
             field_width = max(displaywidth(kd) for _, kd in keys)
             field_width = max(field_width, 12)
             # Each item line is "    {key:{field_width}}: {value}"; budget the
@@ -407,7 +441,9 @@ def _format_change_lines(
             formatted_items = []
             for (k, key_display), v in zip(keys, value.values()):
                 key_path = _join_path(base_path, str(k))
-                v_str = _format_value(v, key_path, max_len=value_width, logfmt=logfmt)
+                v_str = _format_value(
+                    v, key_path, max_len=value_width, logfmt=logfmt, highlight=highlight
+                )
                 formatted_items.append((key_display, v_str))
             return lines + [
                 str(
@@ -417,11 +453,13 @@ def _format_change_lines(
                 )
                 for k, v in formatted_items
             ]
-        value_str = _format_value(value, ".".join(path), logfmt=logfmt)
+        value_str = _format_value(
+            value, ".".join(path), logfmt=logfmt, highlight=highlight
+        )
         return [str(Line()("  ", path_str, " ").sep("=")(" ", value_str))]
 
-    value_str = _format_value(value, ".".join(path), logfmt=logfmt)
-    path_str = _format_path(path, logfmt=logfmt)
+    value_str = _format_value(value, ".".join(path), logfmt=logfmt, highlight=highlight)
+    path_str = _format_path(path, logfmt=logfmt, highlight=highlight)
     return [str(Line()("  ", path_str, " ").sep("=")(" ", value_str))]
 
 
@@ -429,6 +467,7 @@ def format_diff(
     diff: dict,
     previous: dict | None = None,
     logfmt: Callable[[Any, str], str | None] | None = None,
+    highlight: Any = None,
 ) -> list[str]:
     """Format a JSON diff as human-readable lines.
 
@@ -439,6 +478,8 @@ def format_diff(
             ``path`` is a dot-notation string; ``"$user"`` is used for the
             transaction actor.  If the callable returns ``None``, default
             formatting is used.
+        highlight: Optional match highlighter hook (see
+            :class:`kanta.grep.GrepHighlighter`) wrapping matched regions.
 
     Returns a list of formatted lines (without newlines).
     """
@@ -448,7 +489,7 @@ def format_diff(
         return []
     lines = []
     for change_type, path, value in changes:
-        lines.extend(_format_change_lines(change_type, path, value, logfmt))
+        lines.extend(_format_change_lines(change_type, path, value, logfmt, highlight))
     return lines
 
 
@@ -456,12 +497,22 @@ def format_action_header(
     action: str,
     user: str | None = None,
     extra: Any = None,
+    highlight: Any = None,
 ) -> str:
-    """Format the default action header line."""
+    """Format the default action header line.
+
+    ``highlight`` is an optional hook with a ``meta(text, field)`` method
+    (see :class:`kanta.grep.GrepHighlighter`) wrapping matched regions of
+    the action and user fields.
+    """
+    if highlight is not None:
+        action = highlight.meta(action, "action")
     line = Line().action(action)
     if extra is not None and (extra := f"{extra}"):
         line(" ").target(extra)
     if user is not None and (user := f"{user}"):
+        if highlight is not None:
+            user = highlight.meta(user, "user")
         line(" by ").user(user)
     return str(line)
 
