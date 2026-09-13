@@ -3,7 +3,7 @@
 jsondiff is a dev dependency used only here, to verify that:
 
 - jsondiff.patch(..., marshal=True) can apply patches produced by
-  compute_diff (our format is a subset of jsondiff's marshaled syntax);
+  diff (our format is a subset of jsondiff's marshaled syntax);
 - apply_diff can apply patches produced by jsondiff.diff(..., marshal=True),
   including positional $insert/$delete list edits and per-index nested diffs.
 """
@@ -11,88 +11,88 @@ jsondiff is a dev dependency used only here, to verify that:
 import jsondiff
 import pytest
 
-from kanta.diff import compute_diff, patch_state
+from kanta.diff import diff, patch
 from kanta.logging import format_diff
 from kanta.serialization.base import apply_diff
 
-# --- Producer: compute_diff ------------------------------------------------
+# --- Producer: diff ------------------------------------------------
 
 
 def test_no_diff():
-    assert compute_diff({"a": 1}, {"a": 1}) is None
-    assert compute_diff({}, {}) is None
+    assert diff({"a": 1}, {"a": 1}) is None
+    assert diff({}, {}) is None
 
 
 def test_simple_diff():
-    diff = compute_diff({"a": 1}, {"a": 2})
-    assert diff is not None
-    assert diff == {"a": 2}
+    delta = diff({"a": 1}, {"a": 2})
+    assert delta is not None
+    assert delta == {"a": 2}
 
 
 def test_nested_diff():
-    diff = compute_diff({"x": {"y": 1}}, {"x": {"y": 2}})
-    assert diff == {"x": {"y": 2}}
+    delta = diff({"x": {"y": 1}}, {"x": {"y": 2}})
+    assert delta == {"x": {"y": 2}}
 
 
 def test_key_added():
-    assert compute_diff({"a": 1}, {"a": 1, "b": 2}) == {"b": 2}
+    assert diff({"a": 1}, {"a": 1, "b": 2}) == {"b": 2}
 
 
 def test_key_removed():
-    assert compute_diff({"a": 1, "b": 2}, {"a": 1}) == {"$delete": ["b"]}
+    assert diff({"a": 1, "b": 2}, {"a": 1}) == {"$delete": ["b"]}
 
 
 def test_last_key_removed_is_delete_not_replace():
     # jsondiff's minimal-diff search emits {"$replace": {}} here; we emit
     # what actually happened: the key was deleted.
-    assert compute_diff({"a": 1}, {}) == {"$delete": ["a"]}
-    assert compute_diff({"x": {"y": 1}}, {"x": {}}) == {"x": {"$delete": ["y"]}}
+    assert diff({"a": 1}, {}) == {"$delete": ["a"]}
+    assert diff({"x": {"y": 1}}, {"x": {}}) == {"x": {"$delete": ["y"]}}
 
 
 def test_list_changes_are_full_assignment():
     # No $insert/$delete positional edits: lists are replaced wholesale.
-    assert compute_diff({"l": [1, 2]}, {"l": [1, 2, 3]}) == {"l": [1, 2, 3]}
-    assert compute_diff({"l": [1, 2, 3]}, {"l": [1, 3]}) == {"l": [1, 3]}
-    assert compute_diff({"l": [1]}, {"l": []}) == {"l": []}
+    assert diff({"l": [1, 2]}, {"l": [1, 2, 3]}) == {"l": [1, 2, 3]}
+    assert diff({"l": [1, 2, 3]}, {"l": [1, 3]}) == {"l": [1, 3]}
+    assert diff({"l": [1]}, {"l": []}) == {"l": []}
 
 
 def test_list_with_unchanged_prefix_is_full_assignment():
-    diff = compute_diff({"l": ["a", "b", "c"]}, {"l": ["a", "x", "b", "c"]})
-    assert diff == {"l": ["a", "x", "b", "c"]}
+    delta = diff({"l": ["a", "b", "c"]}, {"l": ["a", "x", "b", "c"]})
+    assert delta == {"l": ["a", "x", "b", "c"]}
 
 
 def test_type_changes_are_full_assignment():
-    assert compute_diff({"a": {"x": 1}}, {"a": [1]}) == {"a": [1]}
+    assert diff({"a": {"x": 1}}, {"a": [1]}) == {"a": [1]}
     # A dict replacing a non-dict is a plain assignment too: the consumer
     # sees from the old value whether to patch (dict) or replace.
-    assert compute_diff({"a": [1]}, {"a": {"x": 1}}) == {"a": {"x": 1}}
-    assert compute_diff({"a": 1}, {"a": None}) == {"a": None}
+    assert diff({"a": [1]}, {"a": {"x": 1}}) == {"a": {"x": 1}}
+    assert diff({"a": 1}, {"a": None}) == {"a": None}
 
 
 def test_new_dict_value_assigned_wholesale():
-    assert compute_diff({}, {"a": {"x": 1}}) == {"a": {"x": 1}}
+    assert diff({}, {"a": {"x": 1}}) == {"a": {"x": 1}}
 
 
 def test_dollar_keys_escaped():
-    assert compute_diff({}, {"$weird": 1}) == {"$$weird": 1}
-    assert compute_diff({"$weird": 1}, {"$weird": 2}) == {"$$weird": 2}
-    assert compute_diff({"$weird": 1}, {}) == {"$delete": ["$$weird"]}
+    assert diff({}, {"$weird": 1}) == {"$$weird": 1}
+    assert diff({"$weird": 1}, {"$weird": 2}) == {"$$weird": 2}
+    assert diff({"$weird": 1}, {}) == {"$delete": ["$$weird"]}
 
 
 def test_dollar_values_not_escaped():
     # Only keys are escaped; values are stored verbatim, even "$delete".
-    assert compute_diff({"s": 1}, {"s": "$y"}) == {"s": "$y"}
-    assert compute_diff({"s": 1}, {"s": "$delete"}) == {"s": "$delete"}
-    assert compute_diff({}, {"o": {"s": "$y", "l": ["$z"]}}) == {
+    assert diff({"s": 1}, {"s": "$y"}) == {"s": "$y"}
+    assert diff({"s": 1}, {"s": "$delete"}) == {"s": "$delete"}
+    assert diff({}, {"o": {"s": "$y", "l": ["$z"]}}) == {
         "o": {"s": "$y", "l": ["$z"]}
     }
 
 
-# --- Consumer: apply_diff / patch_state -------------------------------------
+# --- Consumer: apply_diff / patch -------------------------------------
 
 
-def test_patch_state_delegates():
-    assert patch_state({"a": 1}, {"a": 2}) == {"a": 2}
+def test_patch_delegates():
+    assert patch({"a": 1}, {"a": 2}) == {"a": 2}
 
 
 def test_apply_scalar_and_add():
@@ -218,9 +218,9 @@ JSONDIFF_APPLIES_CASES = [
     "name,old,new", JSONDIFF_APPLIES_CASES, ids=[c[0] for c in JSONDIFF_APPLIES_CASES]
 )
 def test_jsondiff_applies_our_patches(name, old, new):
-    diff = compute_diff(old, new)
-    assert diff is not None
-    assert jsondiff.patch(old, diff, marshal=True) == new
+    delta = diff(old, new)
+    assert delta is not None
+    assert jsondiff.patch(old, delta, marshal=True) == new
 
 
 @pytest.mark.parametrize("name,old,new", COMPAT_CASES, ids=[c[0] for c in COMPAT_CASES])
@@ -231,15 +231,15 @@ def test_we_apply_jsondiff_patches(name, old, new):
 
 @pytest.mark.parametrize("name,old,new", COMPAT_CASES, ids=[c[0] for c in COMPAT_CASES])
 def test_our_own_round_trip(name, old, new):
-    diff = compute_diff(old, new)
-    assert diff is not None
-    assert apply_diff(old, diff) == new
+    delta = diff(old, new)
+    assert delta is not None
+    assert apply_diff(old, delta) == new
 
 
 def test_no_diff_means_equal_states():
     for _name, old, new in COMPAT_CASES:
-        assert compute_diff(old, new) is not None  # cases really differ
-    assert compute_diff({"a": [1, {"b": "$x"}]}, {"a": [1, {"b": "$x"}]}) is None
+        assert diff(old, new) is not None  # cases really differ
+    assert diff({"a": [1, {"b": "$x"}]}, {"a": [1, {"b": "$x"}]}) is None
 
 
 # --- Logging ----------------------------------------------------------------

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Union
 import msgspec
 
 from kanta.callbacks import InjectionContext
-from kanta.diff import patch_state
+from kanta.diff import patch
 from kanta.exceptions import ReplayError
 from kanta.logging import _USER_PATH, LogEvent, transaction_logger
 from kanta.structs import ChangeRecord, Snapshot
@@ -116,7 +116,7 @@ def scan_events(content: bytes, kanta: Kanta[Any]) -> tuple[list[Event], int]:
                 events.append(SnapshotEvent(line_number, byte_pos, record_index, snap))
             else:
                 record = impl.serializer.decode(payload, type=ChangeRecord)
-                state = patch_state(state, record.diff)
+                state = patch(state, record.diff)
                 events.append(ChangeEvent(line_number, byte_pos, record_index, record))
                 change_count += 1
         except msgspec.DecodeError as exc:
@@ -146,7 +146,7 @@ def replay_events(
             yield event, None, state
         else:
             previous = copy.deepcopy(state)
-            state = patch_state(state, event.record.diff)
+            state = patch(state, event.record.diff)
             yield event, previous, state
 
 

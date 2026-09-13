@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from kanta.diff import compute_diff
+from kanta.diff import diff
 from kanta.exceptions import DataIntegrityError
 from kanta.callbacks import InjectionContext
 from kanta.logging import _USER_PATH, LogEvent, emit_event, transaction_logger
@@ -65,19 +65,19 @@ def transaction(
     if current_dict != impl.statedict:
         is_bootstrap = action in {"bootstrap"}
         if not (is_bootstrap and not impl.statedict):
-            diff = compute_diff(impl.statedict, current_dict)
-            if diff:
+            delta = diff(impl.statedict, current_dict)
+            if delta:
                 _logger.critical(
                     "Database state modified outside of transaction! "
                     "This indicates a bug where changes occurred without a transaction wrapper.\n"
                     "Changes detected: %s",
-                    diff,
+                    delta,
                 )
                 raise DataIntegrityError(
                     "Database state modified outside of transaction",
                     db_path=impl.db_path,
                     action=action,
-                    diff=diff,
+                    diff=delta,
                 )
 
     impl.in_transaction = True
@@ -86,8 +86,8 @@ def transaction(
     try:
         yield impl.data
         new_dict = struct_to_dict(impl.data, serializer=impl.serializer)
-        diff = compute_diff(impl.statedict, new_dict)
-        if diff:
+        delta = diff(impl.statedict, new_dict)
+        if delta:
             if impl.callback_registry.has("validate"):
                 impl.callback_registry.invoke_sync(
                     "validate",

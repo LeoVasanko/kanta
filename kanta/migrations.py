@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from kanta.diff import compute_diff
+from kanta.diff import diff
 from kanta.exceptions import DatabaseError
 
 # Cache registries by imported module object so that many Kanta instances using
@@ -179,7 +179,7 @@ class Migrations:
             self._call_migration(fn, data_dict, kanta)
             current_version = version
             changed = before != data_dict
-            diff = compute_diff(before, data_dict) if changed else None
+            delta = diff(before, data_dict) if changed else None
             desc = (fn.__doc__ or f"v{version}").split("\n")[0].rstrip(".")
             migrations.append(
                 MigrationInfo(
@@ -187,7 +187,7 @@ class Migrations:
                     description=desc,
                     version=version,
                     changed=changed,
-                    diff=diff,
+                    diff=delta,
                     before=before,
                 )
             )

@@ -49,16 +49,16 @@ def _diff(previous, current):
     return current
 
 
-def compute_diff(previous: dict, current: dict) -> dict | None:
+def diff(previous: dict, current: dict) -> dict | None:
     """Compute a marshaled diff between two state dicts.
 
     Returns None if there is no difference.
     """
-    diff = _diff(previous, current)
-    return diff if diff is not _UNCHANGED else None
+    result = _diff(previous, current)
+    return result if result is not _UNCHANGED else None
 
 
-def patch_state(state: dict, diff: dict) -> dict:
+def patch(state: dict, diff: dict) -> dict:
     """Apply a marshaled diff to a state dict."""
     return apply_diff(state, diff)
 

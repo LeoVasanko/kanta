@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from kanta.callbacks import CallbackRegistry, InjectionContext
-from kanta.diff import compute_diff
+from kanta.diff import diff
 from kanta.exceptions import DatabaseError, DataIntegrityError
 from kanta.filelock import LockedFile
 from kanta.structs import ChangeRecord
@@ -158,11 +158,11 @@ class PersistenceMixin:
             The queued :class:`ChangeRecord`, or ``None`` if the diff was empty
             and *force* is ``False``.
         """
-        diff = compute_diff(self.statedict, current)
-        if not diff:
+        delta = diff(self.statedict, current)
+        if not delta:
             if not force:
                 return None
-            diff = {}
+            delta = {}
 
         # The clock is only read when a record is actually queued.
         now = self.now()
@@ -182,7 +182,7 @@ class PersistenceMixin:
             v=self.version,
             u=user,
             m=m,
-            diff=diff,
+            diff=delta,
         )
         self.pending_changes.append(record)
         self.statedict = copy.deepcopy(current)
