@@ -10,7 +10,7 @@ from kanta.structs import Snapshot
 from kanta.serialization import JsonSerializer, Serializer
 from kanta.serialization.framing import Framer, LineFramer
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 MINDIFFS = 100
 
@@ -69,7 +69,7 @@ class SnapshotState:
             self._write(file, version, state, ts, m=m)
             self._force_pending = False
         except Exception as exc:
-            _logger.error("snapshot: failed to write snapshot: %r", exc)
+            _logger.error("Kanta snapshot failed: %r", exc)
 
     def _write(
         self, file, version: int, state: dict, now: datetime, m: datetime | None = None

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from kanta.exceptions import FileLockError
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 
 def _fatal(msg: str, *, db_path: Path | None = None) -> None:

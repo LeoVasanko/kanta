@@ -54,7 +54,37 @@ def _state_tag(ann: Any) -> str | None:
     return None
 
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
+
+
+def describe_callback(callback: Callable[..., Any]) -> str:
+    """Return ``name (docstring first line)`` identifying *callback*.
+
+    Used in failure messages so a bare log line names the function that
+    failed, e.g. ``myformatter (Concise log formatter)``.
+    """
+    name = getattr(callback, "__name__", None) or type(callback).__name__
+    doc = inspect.getdoc(callback)
+    if doc:
+        return f"{name} ({doc.splitlines()[0]})"
+    return name
+
+
+def callback_error_reporter(
+    kind: str,
+) -> Callable[[Exception, Callable[..., Any]], None]:
+    """Return an ``on_error`` reporter for :meth:`CallbackRegistry.invoke`.
+
+    The returned callable logs ``Kanta.<kind> <name (docstring)> failed:
+    <error>`` for each failing callback; invoke continues with the rest.
+    """
+
+    def _report(callback_error: Exception, callback: Callable[..., Any]) -> None:
+        _logger.exception(
+            "Kanta.%s %s failed: %s", kind, describe_callback(callback), callback_error
+        )
+
+    return _report
 
 
 class LogFmt:
@@ -281,7 +311,7 @@ class CallbackRegistry:
                 except Exception:
                     # Formatting must never break functionality; a failing
                     # callback is reported and treated as a fall-through.
-                    _logger.exception("logfmt callback %r failed", fn)
+                    _logger.exception("Kanta.logfmt %s failed", describe_callback(fn))
                     continue
                 if resolved is not None:
                     return resolved

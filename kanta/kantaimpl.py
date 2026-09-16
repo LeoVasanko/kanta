@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Generic, TypeVar
 
-from kanta.callbacks import CallbackRegistry, InjectionContext
+from kanta.callbacks import CallbackRegistry, InjectionContext, callback_error_reporter
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
 from kanta.logging import (
     _USER_PATH,
@@ -25,14 +25,9 @@ from kanta.rotation import execute_rotation, plan_rotation
 from kanta.serialization import restore_data_in_place, struct_to_dict
 from kanta.serialization.base import replay
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 T = TypeVar("T")
-
-
-def _log_callback_error(callback_error, callback):
-    """Report a failing logging callback and continue with the next one."""
-    _logger.exception("Log callback %r failed: %s", callback, callback_error)
 
 
 class KantaImpl(PersistenceMixin, Generic[T]):
@@ -119,7 +114,7 @@ class KantaImpl(PersistenceMixin, Generic[T]):
                     kanta=self._kanta,
                     report=report,
                 ),
-                on_error=_log_callback_error,
+                on_error=callback_error_reporter("logmigr"),
             )
             return
 

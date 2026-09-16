@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from kanta.callbacks import CallbackRegistry, InjectionContext
+from kanta.callbacks import CallbackRegistry, InjectionContext, callback_error_reporter
 from kanta.diff import diff
 from kanta.exceptions import DatabaseError, DataIntegrityError
 from kanta.filelock import LockedFile
@@ -21,7 +21,7 @@ from kanta.serialization import JsonSerializer, Serializer
 from kanta.serialization.framing import Framer
 from kanta.snapshot import SnapshotState
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 
 class PersistenceMixin:
@@ -110,18 +110,10 @@ class PersistenceMixin:
                 break
             except DatabaseError as e:
                 self.background_error = e
-
-                def _log_callback_error(callback_error, callback):
-                    _logger.exception(
-                        "Background error callback %r failed: %s",
-                        callback,
-                        callback_error,
-                    )
-
                 await self.callback_registry.invoke(
                     "fatal_error",
                     InjectionContext(error=e, kanta=self._kanta),
-                    on_error=_log_callback_error,
+                    on_error=callback_error_reporter("fatal_error"),
                 )
                 _logger.error("Background flush loop stopped: %s", e)
                 break

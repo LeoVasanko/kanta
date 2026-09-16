@@ -20,7 +20,7 @@ from kanta.structs import ChangeRecord, Snapshot
 from kanta.serialization.base import Serializer, apply_diff
 from kanta.serialization.framing import Framer
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 
 @dataclass

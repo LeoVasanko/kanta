@@ -13,7 +13,7 @@ from kanta.callbacks import InjectionContext
 from kanta.logging import _USER_PATH, LogEvent, emit_event, transaction_logger
 from kanta.serialization import restore_data_in_place, struct_to_dict
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("kanta")
 
 
 def _build_logfmt(impl, previous: dict, current: dict):

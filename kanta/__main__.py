@@ -17,7 +17,7 @@ from typing import Any
 import msgspec
 
 from kanta import Kanta
-from kanta.callbacks import InjectionContext
+from kanta.callbacks import InjectionContext, callback_error_reporter
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
 from kanta.grep import GrepPattern, evaluate
 from kanta.logging import (
@@ -49,8 +49,6 @@ EXIT_RANGE_ERROR = 2
 EXIT_PARSE_ERROR = 10
 EXIT_MIGRATION_ERROR = 20
 EXIT_VALIDATION_ERROR = 21
-
-_logger = logging.getLogger(__name__)
 
 
 def _print(*args: Any) -> None:
@@ -408,13 +406,11 @@ async def _log_migration(
     """
     registry = kanta._impl.callback_registry
     if registry.has("logmigr"):
-        try:
-            await registry.invoke(
-                "logmigr",
-                InjectionContext(kanta=kanta, report=result),
-            )
-        except Exception:
-            _logger.exception("logmigr callback failed")
+        await registry.invoke(
+            "logmigr",
+            InjectionContext(kanta=kanta, report=result),
+            on_error=callback_error_reporter("logmigr"),
+        )
         return
     if quiet:
         return
