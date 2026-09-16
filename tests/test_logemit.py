@@ -38,13 +38,23 @@ def _reset_kanta_loggers():
         logger.handlers.clear()
 
 
+def _setup_logging(**kwargs):
+    """Default kanta logging with the event loggers lifted to INFO.
+
+    Event loggers inherit the root level (WARNING under pytest); output
+    assertions need INFO.
+    """
+    configure_logging(**kwargs)
+    for name in ("kanta.bootstrap", "kanta.migration", "kanta.transaction"):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
 def _change_event(**kwargs) -> LogEvent:
     return LogEvent(kind="change", logger=transaction_logger, action="update", **kwargs)
 
 
 def test_emit_event_falsy_return_stops_chain(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     calls = []
 
     def first(ev):
@@ -60,15 +70,13 @@ def test_emit_event_falsy_return_stops_chain(capsys):
 
 
 def test_emit_event_truthy_return_falls_back_to_default(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     emit_event(_change_event(), [lambda ev: True])
     assert "update" in capsys.readouterr().err
 
 
 def test_emit_event_mutation_reaches_later_handlers_and_default(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     calls = []
 
     def first(ev):
@@ -86,8 +94,7 @@ def test_emit_event_mutation_reaches_later_handlers_and_default(capsys):
 
 
 def test_emit_event_handler_error_falls_back_to_default(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
 
     def boom(ev):
         raise RuntimeError("broken")
@@ -109,8 +116,7 @@ def test_diff_lines_built_lazily(monkeypatch):
 
 
 def test_default_emit_created_and_migrated(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     emit_event(LogEvent(kind="created", logger=bootstrap_logger, filename="x.kantadb"))
     emit_event(
         LogEvent(
@@ -129,8 +135,7 @@ def test_default_emit_created_and_migrated(capsys):
 
 def test_default_emit_strips_ansi_without_color_support(capsys, monkeypatch):
     """NO_COLOR output contains no ANSI codes; FORCE_COLOR keeps them."""
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.delenv("FORCE_COLOR", raising=False)
     emit_event(_change_event(diff={"counter": 1}))
@@ -138,8 +143,7 @@ def test_default_emit_strips_ansi_without_color_support(capsys, monkeypatch):
     assert "\x1b[" not in err
     assert "counter" in err
 
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
     monkeypatch.setenv("FORCE_COLOR", "1")
     monkeypatch.delenv("NO_COLOR", raising=False)
     emit_event(_change_event(diff={"counter": 1}))
@@ -357,8 +361,7 @@ async def test_event_carries_kanta_instance(tmp_path, format_config):
 
 
 def test_header_is_settable_and_used_by_default_emit(capsys):
-    logging.getLogger("kanta").handlers.clear()
-    configure_logging()
+    _setup_logging()
 
     def restyle(ev):
         ev.header = f"CUSTOM {ev.action}"

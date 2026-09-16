@@ -39,33 +39,42 @@ def _reset_kanta_loggers():
 
 
 def test_configure_logging_defaults():
-    kanta_logger = logging.getLogger("kanta")
     configure_logging()
-    assert kanta_logger.level == logging.INFO
-    assert not kanta_logger.propagate
-    assert kanta_logger.handlers
+    for name in ("kanta.bootstrap", "kanta.migration", "kanta.transaction"):
+        logger = logging.getLogger(name)
+        assert logger.level == logging.NOTSET  # inherits the root level
+        assert not logger.propagate
+        assert logger.handlers
 
 
 def test_configure_logging_disables_specific_loggers():
     configure_logging(bootstrap=False, migration=False, transaction=False)
-    assert not logging.getLogger("kanta.bootstrap").propagate
-    assert not logging.getLogger("kanta.migration").propagate
-    assert not logging.getLogger("kanta.transaction").propagate
+    assert logging.getLogger("kanta.bootstrap").disabled
+    assert logging.getLogger("kanta.migration").disabled
+    assert logging.getLogger("kanta.transaction").disabled
 
 
-def test_configure_logging_skiproot_false_leaves_kanta_propagation():
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging(bootstrap=False, skiproot=False)
-    assert kanta_logger.propagate
-    assert not kanta_logger.handlers
-    assert not logging.getLogger("kanta.bootstrap").propagate
+def test_configure_logging_skiproot_false_routes_via_root():
+    configure_logging(skiproot=False)
+    for name in ("kanta.bootstrap", "kanta.migration", "kanta.transaction"):
+        logger = logging.getLogger(name)
+        assert logger.propagate
+        assert not logger.handlers
+
+
+def _setup_logging(**kwargs):
+    """Default kanta logging with the event loggers lifted to INFO.
+
+    Event loggers inherit the root level (WARNING under pytest); output
+    assertions need INFO.
+    """
+    configure_logging(**kwargs)
+    for name in ("kanta.bootstrap", "kanta.migration", "kanta.transaction"):
+        logging.getLogger(name).setLevel(logging.INFO)
 
 
 def test_log_change_no_diff(capsys):
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging()
+    _setup_logging()
     log_change("test", {})
     captured = capsys.readouterr()
     assert "test" in captured.err
@@ -74,9 +83,7 @@ def test_log_change_no_diff(capsys):
 def test_log_change_appends_extra_string(capsys, monkeypatch):
     monkeypatch.setenv("FORCE_COLOR", "1")
     monkeypatch.delenv("NO_COLOR", raising=False)
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging()
+    _setup_logging()
     log_change("export", {}, extra="mydb.db")
     captured = capsys.readouterr()
     assert "export" in captured.err
@@ -84,9 +91,7 @@ def test_log_change_appends_extra_string(capsys, monkeypatch):
 
 
 def test_log_change_log_diff_false(capsys, monkeypatch):
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging()
+    _setup_logging()
 
     def _boom(*args, **kwargs):
         raise AssertionError("format_diff should not be called")
@@ -99,9 +104,7 @@ def test_log_change_log_diff_false(capsys, monkeypatch):
 
 
 def test_configure_logging_diff_false(capsys):
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging(diff=False)
+    _setup_logging(diff=False)
     log_change("update", {"counter": 5}, previous={})
     captured = capsys.readouterr()
     assert "update" in captured.err
@@ -109,10 +112,9 @@ def test_configure_logging_diff_false(capsys):
 
 
 def test_configure_logging_diff_true_reenables(capsys):
-    kanta_logger = logging.getLogger("kanta")
-    kanta_logger.handlers.clear()
-    configure_logging(diff=False)
+    _setup_logging(diff=False)
     configure_logging(diff=True)
+    logging.getLogger("kanta.transaction").setLevel(logging.INFO)
     log_change("update", {"counter": 5}, previous={})
     captured = capsys.readouterr()
     assert "counter" in captured.err

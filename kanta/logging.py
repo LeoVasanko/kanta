@@ -24,7 +24,17 @@ transaction_logger = logging.getLogger("kanta.transaction")
 bootstrap_logger = logging.getLogger("kanta.bootstrap")
 migration_logger = logging.getLogger("kanta.migration")
 
-_logger = logging.getLogger(__name__)
+# Event loggers carry Kanta-rendered content (colored headers, diffs) and are
+# configured at import time; diagnostics from Kanta's internals use the plain
+# "kanta" logger so they follow the application's root logging configuration.
+EVENT_LOGGERS = ("kanta.bootstrap", "kanta.migration", "kanta.transaction")
+
+# Loggers that emit DEBUG-level events (file-opened summary, migration diffs).
+_DEBUG_LOGGERS = ("kanta.bootstrap", "kanta.migration")
+
+_PLAIN_HANDLER_NAME = "kanta.plain"
+
+_logger = logging.getLogger("kanta")
 
 # Pattern to match control characters and bidirectional overrides
 _UNSAFE_CHARS = re.compile(
@@ -148,7 +158,7 @@ def emit_event(
             try:
                 proceed = handler(ev)
             except Exception:
-                _logger.exception("logemit callback failed, using default formatting")
+                _logger.exception("Kanta.logemit callback failed, using default formatting")
                 break
             if not proceed:
                 return
@@ -566,6 +576,15 @@ def log_change(
     )
 
 
+def _ensure_plain_handler(logger: logging.Logger) -> None:
+    """Attach Kanta's no-prefix stderr handler to *logger* if it has none."""
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler.name = _PLAIN_HANDLER_NAME
+        logger.addHandler(handler)
+
+
 def configure_logging(
     *,
     skiproot: bool = True,
@@ -577,13 +596,22 @@ def configure_logging(
 ) -> None:
     """Configure Kanta's default logging output.
 
+    Called once at import time with default arguments; call again to change
+    the toggles.  The event loggers ``kanta.bootstrap``, ``kanta.migration``
+    and ``kanta.transaction`` carry Kanta-rendered output (colored headers,
+    diffs) and print it bare through a plain stderr handler with
+    ``propagate = False``.  Diagnostic messages use the plain ``kanta``
+    logger and follow the application's root logging configuration.
+
+    No levels are set by default: the event loggers inherit the effective
+    level of the root logger, so a framework switching root between INFO in
+    development and WARNING in production governs Kanta output too.
+
     Args:
-        skiproot: If ``True`` (default), attach a no-prefix stderr handler to
-            the ``kanta`` logger and set ``kanta.propagate = False`` so Kanta
-            output is rendered directly without propagating to the root logger.
-            If ``False``, the child logger enable flags are still applied, but
-            no handler is added and ``kanta`` propagation is left untouched so
-            the application's root logger handles Kanta output.
+        skiproot: If ``True`` (default), event loggers print through Kanta's
+            own plain handler without propagating to the root logger.  If
+            ``False``, Kanta's handler is removed and propagation enabled so
+            the application's root logger renders event output instead.
         bootstrap: Whether bootstrap logs are enabled.
         migration: Whether migration logs are enabled.
         transaction: Whether transaction logs are enabled.
@@ -591,13 +619,10 @@ def configure_logging(
             only transaction headers are printed and diff formatting is
             skipped.  Per transaction this is controlled by the ``logdiff``
             argument of :meth:`Kanta.transaction`.
-        debug: Whether to set the ``kanta`` logger level to ``DEBUG`` instead
-            of ``INFO``.  This reveals debug-level output such as migration
-            diffs, which are hidden by default.
-
-    This helper is not called automatically; applications that want Kanta's
-    default output can call it, but most applications will configure logging
-    themselves.
+        debug: Whether to set the event loggers that emit DEBUG-level output
+            (bootstrap and migration) to ``DEBUG``, revealing output such as
+            the file-opened summary and migration diffs.  ``False`` resets
+            them to inheriting the root level.
     """
     logging.getLogger("kanta.transaction.diff").disabled = not diff
 
@@ -606,16 +631,21 @@ def configure_logging(
         ("kanta.migration", migration),
         ("kanta.transaction", transaction),
     ):
-        logging.getLogger(name).propagate = enabled
+        logging.getLogger(name).disabled = not enabled
 
-    if not skiproot:
-        return
+    for name in _DEBUG_LOGGERS:
+        logging.getLogger(name).setLevel(logging.DEBUG if debug else logging.NOTSET)
 
-    target = logging.getLogger("kanta")
-    target.propagate = False
+    for name in EVENT_LOGGERS:
+        logger = logging.getLogger(name)
+        if skiproot:
+            logger.propagate = False
+            _ensure_plain_handler(logger)
+        else:
+            logger.propagate = True
+            logger.handlers[:] = [
+                h for h in logger.handlers if h.name != _PLAIN_HANDLER_NAME
+            ]
 
-    if not target.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        target.addHandler(handler)
-    target.setLevel(logging.DEBUG if debug else logging.INFO)
+
+configure_logging()  # Import-time default setup; call again to reconfigure.
