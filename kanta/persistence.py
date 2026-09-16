@@ -115,7 +115,9 @@ class PersistenceMixin:
                     InjectionContext(error=e, kanta=self._kanta),
                     on_error=callback_error_reporter("fatal_error"),
                 )
-                _logger.error("Background flush loop stopped: %s", e)
+                _logger.error(
+                    "Kanta background flush failed; automatic flushing stopped: %s", e
+                )
                 break
 
     def maybe_snapshot(self) -> None:

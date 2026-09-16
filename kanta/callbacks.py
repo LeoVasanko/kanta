@@ -61,9 +61,13 @@ def describe_callback(callback: Callable[..., Any]) -> str:
     """Return ``name (docstring first line)`` identifying *callback*.
 
     Used in failure messages so a bare log line names the function that
-    failed, e.g. ``myformatter (Concise log formatter)``.
+    failed, e.g. ``myformatter (Concise log formatter)``.  Callables without
+    a ``__name__`` (partials, callable instances, ...) are described by
+    their type name only: less information, but never wrong information.
     """
-    name = getattr(callback, "__name__", None) or type(callback).__name__
+    name = getattr(callback, "__name__", None)
+    if not isinstance(name, str):
+        return type(callback).__name__
     doc = inspect.getdoc(callback)
     if doc:
         return f"{name} ({doc.splitlines()[0]})"
@@ -75,14 +79,13 @@ def callback_error_reporter(
 ) -> Callable[[Exception, Callable[..., Any]], None]:
     """Return an ``on_error`` reporter for :meth:`CallbackRegistry.invoke`.
 
-    The returned callable logs ``Kanta.<kind> <name (docstring)> failed:
-    <error>`` for each failing callback; invoke continues with the rest.
+    The returned callable logs ``Kanta.<kind> <name (docstring)> failed``
+    with the traceback for each failing callback; invoke continues with
+    the rest.
     """
 
     def _report(callback_error: Exception, callback: Callable[..., Any]) -> None:
-        _logger.exception(
-            "Kanta.%s %s failed: %s", kind, describe_callback(callback), callback_error
-        )
+        _logger.exception("Kanta.%s %s failed", kind, describe_callback(callback))
 
     return _report
 
@@ -275,12 +278,14 @@ class CallbackRegistry:
 
     def build_logfmt(self, ctx: InjectionContext) -> Callable[[Any, str], str | None]:
         """Build a chained formatter from registered logfmt callbacks."""
-        formatters: list[tuple[Callable[[Any, str], str | None], str | None]] = []
+        formatters: list[
+            tuple[Callable[[Any, str], str | None], str | None, Callable[..., Any]]
+        ] = []
         for spec in self._logfmt_callbacks:
             if isinstance(spec, _LogFmtClassSpec):
                 kwargs = self._build_kwargs(spec.inject_params, ctx)
                 instance: Callable[[Any, str], str | None] = spec.cls(**kwargs)
-                formatters.append((instance, spec.path))
+                formatters.append((instance, spec.path, spec.cls))
             else:
                 kwargs = self._build_kwargs(spec.inject_params, ctx)
 
@@ -300,10 +305,10 @@ class CallbackRegistry:
 
                     return formatter
 
-                formatters.append((make_formatter(), spec.path))
+                formatters.append((make_formatter(), spec.path, spec.callback))
 
         def format_value(value: Any, path: str) -> str | None:
-            for fn, pattern in formatters:
+            for fn, pattern, callback in formatters:
                 if pattern is not None and path != pattern:
                     continue
                 try:
@@ -311,7 +316,9 @@ class CallbackRegistry:
                 except Exception:
                     # Formatting must never break functionality; a failing
                     # callback is reported and treated as a fall-through.
-                    _logger.exception("Kanta.logfmt %s failed", describe_callback(fn))
+                    _logger.exception(
+                        "Kanta.logfmt %s failed", describe_callback(callback)
+                    )
                     continue
                 if resolved is not None:
                     return resolved

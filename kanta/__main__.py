@@ -8,7 +8,6 @@ import contextlib
 import importlib
 import importlib.metadata
 import importlib.util
-import logging
 import sys
 import tempfile
 from pathlib import Path

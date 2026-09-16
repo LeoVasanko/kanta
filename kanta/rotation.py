@@ -216,7 +216,8 @@ def execute_rotation(
         f.truncate(plan.cutoff_end)
     if log:
         _logger.info(
-            "rotated %s: kept %d change record(s), history before %s moved to %s",
+            "Rotated database %s: kept %d change record(s), "
+            "moved history before %s to %s",
             path,
             plan.retained_changes,
             plan.rotated_ts.isoformat(),

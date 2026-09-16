@@ -17,6 +17,7 @@ from typing import Any
 
 import msgspec
 
+from kanta.callbacks import describe_callback
 from kanta.serialization.base import _apply, unmarshal
 from kanta.tty import Line, displaywidth, strip_ansi, use_color
 
@@ -158,13 +159,16 @@ def emit_event(
             try:
                 proceed = handler(ev)
             except Exception:
-                _logger.exception("Kanta.logemit callback failed, using default formatting")
+                _logger.exception(
+                    "Kanta.logemit %s failed, using default formatting",
+                    describe_callback(handler),
+                )
                 break
             if not proceed:
                 return
         render(ev)
     except Exception:
-        _logger.exception("failed to emit %s log event", ev.kind)
+        _logger.exception("Kanta failed to emit %s log event", ev.kind)
 
 
 def _maybe_strip(text: str) -> str:
@@ -604,8 +608,7 @@ def configure_logging(
     logger and follow the application's root logging configuration.
 
     No levels are set by default: the event loggers inherit the effective
-    level of the root logger, so a framework switching root between INFO in
-    development and WARNING in production governs Kanta output too.
+    level of the root logger.
 
     Args:
         skiproot: If ``True`` (default), event loggers print through Kanta's
