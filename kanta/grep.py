@@ -376,6 +376,48 @@ class GrepHighlighter:
         return self._apply_marks(text, self._meta_marks.get(field, []))
 
 
+def _match_entry(
+    pattern: GrepPattern, entry: _Entry, logfmt: Any
+) -> tuple[frozenset[int] | None, _ValueMark | None] | None:
+    """Match one pattern against one entry, returning its match marks.
+
+    Returns ``None`` when the entry does not match.  Otherwise returns the
+    matched path-element indices and/or the value mark, ready for
+    :meth:`GrepHighlighter.add`.
+    """
+    pretty = None
+    if logfmt is not None:
+        pretty = logfmt(entry.raw, ".".join(entry.path))
+    if pattern.term is not None:
+        elements = _match_path(pattern.term, entry.path)
+        vmark = _dual_mark(pattern.term, entry.raw, entry.text, pretty)
+        if elements is None and vmark is None:
+            return None
+    else:
+        elements = _match_path(pattern.path_term or "", entry.path)
+        vmark = _dual_mark(pattern.value_term or "", entry.raw, entry.text, pretty)
+        if elements is None or vmark is None:
+            return None
+    return elements, vmark
+
+
+def matches_snapshot(
+    state: dict, patterns: list[GrepPattern], logfmt: Any = None
+) -> bool:
+    """Match *patterns* against a snapshot's full state.
+
+    The state is flattened into the same ``(path, value)`` entries change
+    records are matched against, so path and value matching semantics are
+    identical; a snapshot simply has no action or user to match.  Returns
+    whether every pattern matched somewhere in the state.
+    """
+    entries = list(_leaf_entries([], unmarshal(state), None))
+    for pattern in patterns:
+        if not any(_match_entry(pattern, entry, logfmt) for entry in entries):
+            return False
+    return True
+
+
 def evaluate(
     record: ChangeRecord,
     previous: dict | None,
@@ -411,23 +453,11 @@ def evaluate(
                     highlighter.add_meta("user", mark)
                     matched = True
         for entry in entries:
-            pretty = None
-            if logfmt is not None:
-                pretty = logfmt(entry.raw, ".".join(entry.path))
-            if pattern.term is not None:
-                elements = _match_path(pattern.term, entry.path)
-                vmark = _dual_mark(pattern.term, entry.raw, entry.text, pretty)
-                if elements is None and vmark is None:
-                    continue
-            else:
-                elements = _match_path(pattern.path_term or "", entry.path)
-                vmark = _dual_mark(
-                    pattern.value_term or "", entry.raw, entry.text, pretty
-                )
-                if elements is None or vmark is None:
-                    continue
+            match = _match_entry(pattern, entry, logfmt)
+            if match is None:
+                continue
             matched = True
-            highlighter.add(entry, elements, vmark)
+            highlighter.add(entry, *match)
         if not matched:
             return None
     return highlighter

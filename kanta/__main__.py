@@ -18,7 +18,7 @@ import msgspec
 from kanta import Kanta
 from kanta.callbacks import InjectionContext, callback_error_reporter
 from kanta.exceptions import DatabaseError, DataIntegrityError, ReplayError
-from kanta.grep import GrepPattern, evaluate
+from kanta.grep import GrepPattern, evaluate, matches_snapshot
 from kanta.logging import (
     LogEvent,
     emit_event,
@@ -538,6 +538,16 @@ async def _run(args: argparse.Namespace) -> int:
                     continue
                 label = record_label(event.line_number, event.record_index)
                 if isinstance(event, SnapshotEvent):
+                    if grep_patterns:
+                        logfmt = kanta._impl.callback_registry.build_logfmt(
+                            InjectionContext(
+                                kanta=kanta,
+                                previous_state=current,
+                                current_state=current,
+                            )
+                        )
+                        if not matches_snapshot(current, grep_patterns, logfmt=logfmt):
+                            continue
                     _print_snapshot_indicator(
                         label,
                         event.snap,

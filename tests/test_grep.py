@@ -11,6 +11,7 @@ from kanta.grep import (
     _match_value,
     evaluate,
     mark_spans,
+    matches_snapshot,
 )
 from kanta.logging import _USER_PATH
 from kanta.serialization import JsonSerializer
@@ -227,6 +228,29 @@ def test_highlighter_meta_marks_action_and_user():
     assert hl.meta("extra", "other") == "extra"
 
 
+def test_matches_snapshot_uses_change_record_matching():
+    state = {"users": {"alice": {"email": "alice@example.com", "age": 30}}}
+    assert matches_snapshot(state, _patterns("users.alice"))
+    assert matches_snapshot(state, _patterns("alice@example"))
+    assert matches_snapshot(state, _patterns("age=30"))
+    assert matches_snapshot(state, _patterns("users.alice", "=30"))
+    assert not matches_snapshot(state, _patterns("bob"))
+    assert not matches_snapshot(state, _patterns("3"))  # not a full number match
+    assert not matches_snapshot(state, _patterns("alice", "missing"))
+    assert not matches_snapshot({}, _patterns("alice"))
+
+
+def test_matches_snapshot_supports_logfmt_prettified_values():
+    state = {"when": 1767225600}
+
+    def logfmt(value, path):
+        return "2026-01-01" if value == 1767225600 else None
+
+    assert matches_snapshot(state, _patterns("2026"), logfmt=logfmt)
+    assert matches_snapshot(state, _patterns("1767225600"), logfmt=logfmt)
+    assert not matches_snapshot(state, _patterns("2026"))
+
+
 def test_entry_dataclass_holds_anchor_for_deletes():
     entry = _Entry(["a", "b"], 1, "1", anchor=["a"])
     assert entry.anchor == ["a"]
@@ -269,7 +293,7 @@ def _sample_changes():
     ]
 
 
-def _run_cli(tmp_path, capsys, monkeypatch, changes, *args, color=False):
+def _run_cli(tmp_path, capsys, monkeypatch, changes, *args, color=False, state=None):
     if color:
         monkeypatch.setenv("FORCE_COLOR", "1")
         monkeypatch.delenv("NO_COLOR", raising=False)
@@ -277,7 +301,7 @@ def _run_cli(tmp_path, capsys, monkeypatch, changes, *args, color=False):
         monkeypatch.setenv("NO_COLOR", "1")
         monkeypatch.delenv("FORCE_COLOR", raising=False)
     path = tmp_path / "test.kantadb"
-    _write_db(path, changes)
+    _write_db(path, changes, state=state)
     code = main([str(path), *args])
     assert code == 0
     return capsys.readouterr().err
@@ -335,11 +359,66 @@ def test_cli_grep_repeated_patterns_must_all_match(tmp_path, capsys, monkeypatch
 
 
 def test_cli_grep_no_match_exits_zero(tmp_path, capsys, monkeypatch):
-    """No matching records is not an error; snapshot lines still print."""
+    """No matching records is not an error; non-matching snapshots are hidden."""
     err = _run_cli(tmp_path, capsys, monkeypatch, _sample_changes(), "--grep", "nobody")
-    assert "snapshot s0" in err
+    assert "snapshot s0" not in err
     assert "create_alice" not in err
     assert "create_bob" not in err
+
+
+def test_cli_grep_snapshot_prints_only_when_state_matches(
+    tmp_path, capsys, monkeypatch
+):
+    """Snapshots are matched against their full state like change records."""
+    state = {"users": {"alice": {"email": "alice@example.com", "age": 30}}}
+
+    err = _run_cli(
+        tmp_path,
+        capsys,
+        monkeypatch,
+        _sample_changes(),
+        "--grep",
+        "alice",
+        state=state,
+    )
+    assert "snapshot s0" in err
+
+    err = _run_cli(
+        tmp_path,
+        capsys,
+        monkeypatch,
+        _sample_changes(),
+        "--grep",
+        "users.alice.age=30",
+        state=state,
+    )
+    assert "snapshot s0" in err
+
+    # A pattern matching nothing in the state suppresses the snapshot.
+    err = _run_cli(
+        tmp_path,
+        capsys,
+        monkeypatch,
+        _sample_changes(),
+        "--grep",
+        "bob",
+        state=state,
+    )
+    assert "snapshot s0" not in err
+
+    # Repeated patterns are ANDed within the snapshot state too.
+    err = _run_cli(
+        tmp_path,
+        capsys,
+        monkeypatch,
+        _sample_changes(),
+        "--grep",
+        "alice",
+        "--grep",
+        "missing",
+        state=state,
+    )
+    assert "snapshot s0" not in err
 
 
 def test_cli_grep_path_value_forms(tmp_path, capsys, monkeypatch):
